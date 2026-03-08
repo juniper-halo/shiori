@@ -22,6 +22,75 @@ This is a deliberate design phase so architecture and contracts are solid before
 
 In this scaffold phase, those stages exist as module boundaries and status-driven stubs.
 
+## Architecture Diagrams
+### 1) System-level component map
+```mermaid
+flowchart LR
+    subgraph Host["Raspberry Pi Host"]
+        Systemd["systemd\nassistantd.service"]
+        Daemon["assistantd\n(main + supervisor)"]
+        Config["/etc/local-ai-assistant/assistantd.env"]
+        RuntimeDir["/var/lib/local-ai-assistant\n(temp audio + runtime state)"]
+        Journal["journald logs"]
+    end
+
+    subgraph ChildProc["Child Processes (planned runtime)"]
+        Capture["arecord\nPCM stream"]
+        STT["whisper.cpp\ntranscribe"]
+        LLM["Local LLM adapter\n(abstract now)"]
+        TTS["piper\nsynthesize"]
+        Play["aplay/sox\nplayback"]
+    end
+
+    Systemd --> Daemon
+    Config --> Daemon
+    Daemon --> RuntimeDir
+    Daemon --> Journal
+    Daemon --> Capture
+    Daemon --> STT
+    Daemon --> LLM
+    Daemon --> TTS
+    Daemon --> Play
+```
+
+### 2) Runtime data flow (single interaction)
+```mermaid
+flowchart LR
+    Mic["Mic Input"] --> CapturePCM["audio_capture\nraw PCM frames"]
+    CapturePCM --> Ring["ring_buffer\nSPSC queue"]
+    Ring --> VAD["vad_detector\nspeech boundary events"]
+    VAD --> Utterance["utterance assembler\nWAV artifact"]
+    Utterance --> STT["stt_adapter\ntranscript text"]
+    STT --> Prompt["single-turn prompt"]
+    Prompt --> LLM["llm_adapter\nresponse text"]
+    LLM --> TTS["tts_adapter\nreply WAV"]
+    TTS --> Playback["playback\nspeaker output"]
+```
+
+### 3) Control/state flow
+```mermaid
+stateDiagram-v2
+    [*] --> INIT
+    INIT --> READY: config loaded + validated
+    READY --> RUNNING: supervisor_start()
+    RUNNING --> STOPPING: signal/error/fail-fast
+    STOPPING --> STOPPED: children terminated + resources released
+    STOPPED --> [*]
+```
+
+### 4) Deployment flow over SSH
+```mermaid
+flowchart LR
+    Laptop["Developer Laptop"] -->|rsync repo| PiRepo["Pi:/home/pi/assistantd"]
+    Laptop -->|ssh run installer| Install["scripts/install_assistantd.sh --local-install"]
+    Install --> Apt["apt install build deps"]
+    Apt --> CMake["cmake configure + build"]
+    CMake --> Bin["/usr/local/bin/assistantd"]
+    Install --> Unit["/etc/systemd/system/assistantd.service"]
+    Install --> Env["/etc/local-ai-assistant/assistantd.env"]
+    Unit --> SystemdEnable["systemctl enable --now assistantd"]
+```
+
 ## Important Constraints
 - **Local-only mode is mandatory** right now.
 - `ASSISTANT_MODE` must be `local`.
@@ -100,7 +169,9 @@ Validation is enforced in `src/assistantd/config.c`.
 - journal logging
 
 ### install script
-`scripts/install_assistantd.sh` currently documents install intent and steps but intentionally does not perform complete provisioning yet.
+`scripts/install_assistantd.sh` supports:
+1. local installation on Pi (`--local-install`),
+2. remote deployment over SSH from laptop (`--ssh user@host`).
 
 It should evolve to:
 1. install OS/runtime dependencies,
@@ -173,16 +244,37 @@ This keeps the scaffold discipline intact while implementation is still in progr
 ## How To Implement From Here (Recommended Sequence)
 Use this order to reduce churn and keep modules independently verifiable.
 
-1. Finalize config semantics and runtime directory policy.
-2. Implement robust audio capture process lifecycle.
-3. Implement VAD over fixed frame windows.
-4. Implement utterance buffering and WAV emission.
-5. Integrate STT adapter.
-6. Integrate local LLM adapter.
-7. Integrate TTS adapter + playback.
-8. Harden supervisor error paths and retries.
-9. Finish install script and service hardening.
-10. Add end-to-end integration tests on target Pi.
+### Phase 1: Platform and lifecycle baseline
+1. Finalize config semantics and runtime directory policy in `config.c`.
+2. Remove compile warnings and portability issues (`main.c`, signal/time APIs).
+3. Harden shutdown behavior and supervisor lifecycle transitions.
+4. Add state-transition tests for `INIT -> READY -> RUNNING -> STOPPING -> STOPPED`.
+
+### Phase 2: Audio ingestion and segmentation
+1. Implement `audio_capture` process spawning (`arecord`) and controlled teardown.
+2. Upgrade ring buffer to lock-safe/atomic SPSC behavior under sustained load.
+3. Integrate WebRTC VAD in `vad_detector` with deterministic frame sizing.
+4. Add utterance assembler that emits bounded WAV artifacts per speech segment.
+5. Add tests for overflow, silence timeout, and noisy-frame boundary behavior.
+
+### Phase 3: Model adapters and reply path
+1. Implement `stt_adapter` subprocess contract and transcript extraction.
+2. Implement `llm_adapter` concrete local transport behind current abstract interface.
+3. Implement `tts_adapter` subprocess contract with timeout/error mapping.
+4. Implement `playback` stage and device/busy-state handling.
+5. Add per-stage integration tests with fixture/mocked subprocess behavior.
+
+### Phase 4: Supervisor orchestration and fail-fast policy
+1. Wire full per-interaction pipeline in `assistantd_supervisor_run_once`.
+2. Enforce fail-fast semantics and structured status mapping across stages.
+3. Add recovery policy for child process crashes (restart vs terminate).
+4. Add end-to-end scenario tests for success, stage failure, and shutdown during work.
+
+### Phase 5: Deployment hardening
+1. Complete `install_assistantd.sh` package/runtime provisioning checks.
+2. Add systemd hardening directives and validate service account ownership model.
+3. Add health validation command(s) post-install and log collection guidance.
+4. Validate full SSH deployment path on clean Pi image.
 
 ## Troubleshooting
 ### Build fails with missing CMake/CTest

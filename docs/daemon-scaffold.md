@@ -11,5 +11,5 @@ This repository now targets a local-only C daemon (`assistantd`) as the active r
 - `ASSISTANT_MODE` must be `local`.
 - Remote fallback/remote mode are intentionally unsupported in this phase.
 
-## Archived Runtime
-- Previous Python runtime was moved to `archive/python-runtime/` for reference and rollback planning.
+## Runtime Scope
+- This repository currently keeps only the C daemon scaffold and related docs/tests.

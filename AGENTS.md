@@ -12,7 +12,6 @@ This repo contains a local-only C daemon scaffold (`assistantd`) for orchestrati
 ## Current Reality
 - Runtime implementation is intentionally incomplete.
 - Module files include Doxygen TODO playbooks that define implementation contracts.
-- Archived Python runtime is in `archive/python-runtime/`.
 
 ## Canonical Commands
 - Configure build: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug`

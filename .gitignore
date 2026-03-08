@@ -21,14 +21,4 @@ compile_commands.json
 *.wav
 *.log
 
-# Python artifacts (archived runtime still exists)
-.venv/
-.uv-cache/
-__pycache__/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-*.pyc
-*.pyo
 .env
