@@ -1,0 +1,34 @@
+# General
+.DS_Store
+
+# C/CMake build artifacts
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+CTestTestfile.cmake
+Testing/
+Makefile
+compile_commands.json
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+
+# Runtime artifacts
+*.wav
+*.log
+
+# Python artifacts (archived runtime still exists)
+.venv/
+.uv-cache/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+*.pyc
+*.pyo
+.env

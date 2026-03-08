@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  c-scaffold:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: TODO doc-lint
+        run: |
+          count=$(grep -R --line-number "@todo Implementation Playbook" src/assistantd include/assistantd | wc -l)
+          echo "Found TODO playbook blocks: ${count}"
+          test "${count}" -ge 8

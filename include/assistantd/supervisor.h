@@ -1,0 +1,37 @@
+#ifndef ASSISTANTD_SUPERVISOR_H
+#define ASSISTANTD_SUPERVISOR_H
+
+#include "assistantd/audio_capture.h"
+#include "assistantd/config.h"
+#include "assistantd/llm_adapter.h"
+#include "assistantd/status.h"
+#include "assistantd/stt_adapter.h"
+#include "assistantd/tts_adapter.h"
+#include "assistantd/vad_detector.h"
+
+typedef enum {
+  ASSISTANTD_SUPERVISOR_INIT = 0,
+  ASSISTANTD_SUPERVISOR_READY = 1,
+  ASSISTANTD_SUPERVISOR_RUNNING = 2,
+  ASSISTANTD_SUPERVISOR_STOPPING = 3,
+  ASSISTANTD_SUPERVISOR_STOPPED = 4
+} assistantd_supervisor_state_t;
+
+typedef struct {
+  assistantd_supervisor_state_t state;
+  const assistantd_config_t *config;
+  assistantd_audio_capture_t capture;
+  assistantd_vad_detector_t vad;
+  assistantd_stt_adapter_t stt;
+  assistantd_llm_adapter_t llm;
+  assistantd_tts_adapter_t tts;
+} assistantd_supervisor_t;
+
+assistantd_status_t assistantd_supervisor_init(
+    assistantd_supervisor_t *supervisor,
+    const assistantd_config_t *config);
+assistantd_status_t assistantd_supervisor_start(assistantd_supervisor_t *supervisor);
+assistantd_status_t assistantd_supervisor_run_once(assistantd_supervisor_t *supervisor);
+assistantd_status_t assistantd_supervisor_stop(assistantd_supervisor_t *supervisor);
+
+#endif  // ASSISTANTD_SUPERVISOR_H
