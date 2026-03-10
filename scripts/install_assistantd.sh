@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Fail fast on errors, unset vars, and pipeline failures.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -6,6 +7,7 @@ BUILD_DIR="${ROOT_DIR}/build"
 UNIT_SRC="${ROOT_DIR}/systemd/assistantd.service"
 CONFIG_SRC="${ROOT_DIR}/config/assistantd.env.example"
 
+# Default options; may be overridden by CLI flags.
 SSH_TARGET=""
 REMOTE_DIR=""
 LOCAL_INSTALL=false
@@ -14,6 +16,12 @@ SKIP_ENABLE=false
 NO_BUILD=false
 SERVICE_USER="pi"
 SERVICE_GROUP="pi"
+SSH_TTY=true
+SUDO_KEEPALIVE_PID=""
+SUDO_CMD=(sudo)
+SSH_CONTROL_PATH=""
+SSH_CONTROL_DIR=""
+SSH_MASTER_TARGET=""
 
 log() {
   echo "[install_assistantd] $*"
@@ -41,6 +49,7 @@ Options:
   --config-src <path>    Config template path (default: config/assistantd.env.example).
   --service-user <user>  systemd User= value (default: pi).
   --service-group <grp>  systemd Group= value (default: pi).
+  --ssh-no-tty           Disable pseudo-terminal allocation for remote SSH run.
   --help                 Show help.
 EOF
 }
@@ -52,6 +61,55 @@ require_cmd() {
   fi
 }
 
+# Authenticate once and keep credentials warm during install.
+init_sudo_session() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    SUDO_CMD=()
+    return
+  fi
+
+  require_cmd sudo
+  log "Authenticating sudo session once"
+  sudo -v
+
+  # Keep sudo ticket fresh while install runs so repeated prompts are avoided.
+  (
+    while true; do
+      sleep 30
+      sudo -n true || exit 0
+    done
+  ) &
+  SUDO_KEEPALIVE_PID=$!
+}
+
+cleanup_sudo_session() {
+  if [[ -n "${SUDO_KEEPALIVE_PID}" ]]; then
+    kill "${SUDO_KEEPALIVE_PID}" >/dev/null 2>&1 || true
+  fi
+}
+
+# Close the multiplexed SSH master connection if we created one.
+cleanup_ssh_master() {
+  if [[ -n "${SSH_CONTROL_PATH}" && -n "${SSH_MASTER_TARGET}" ]]; then
+    ssh -S "${SSH_CONTROL_PATH}" -O exit "${SSH_MASTER_TARGET}" >/dev/null 2>&1 || true
+    rm -f "${SSH_CONTROL_PATH}" >/dev/null 2>&1 || true
+    if [[ -n "${SSH_CONTROL_DIR}" ]]; then
+      rmdir "${SSH_CONTROL_DIR}" >/dev/null 2>&1 || true
+    fi
+    SSH_CONTROL_PATH=""
+    SSH_CONTROL_DIR=""
+    SSH_MASTER_TARGET=""
+  fi
+}
+
+cleanup_exit() {
+  cleanup_sudo_session
+  cleanup_ssh_master
+}
+
+trap cleanup_exit EXIT
+
+# Parse installer arguments.
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ssh)
@@ -97,6 +155,10 @@ while [[ $# -gt 0 ]]; do
       SERVICE_GROUP="${2:-}"
       shift 2
       ;;
+    --ssh-no-tty)
+      SSH_TTY=false
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -109,9 +171,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# SSH deploy mode:
+# 1) Open one reusable SSH control connection.
+# 2) Sync repo contents to the target host.
+# 3) Invoke this same installer remotely in --local-install mode.
 if [[ -n "${SSH_TARGET}" && "${LOCAL_INSTALL}" == "false" ]]; then
   require_cmd rsync
   require_cmd ssh
+  require_cmd mktemp
 
   if [[ -z "${REMOTE_DIR}" ]]; then
     if [[ "${SSH_TARGET}" == *"@"* ]]; then
@@ -122,6 +189,17 @@ if [[ -n "${SSH_TARGET}" && "${LOCAL_INSTALL}" == "false" ]]; then
     fi
   fi
 
+  # Reuse one authenticated SSH session for rsync + remote command execution.
+  SSH_CONTROL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/assistantd-ssh-XXXXXXXX")"
+  SSH_CONTROL_PATH="${SSH_CONTROL_DIR}/control.sock"
+  SSH_MASTER_TARGET="${SSH_TARGET}"
+  log "Opening SSH control connection to ${SSH_TARGET}"
+  ssh -MNf \
+    -o ControlMaster=yes \
+    -o ControlPersist=10m \
+    -o ControlPath="${SSH_CONTROL_PATH}" \
+    "${SSH_TARGET}"
+
   local_src="${ROOT_DIR%/}/"
   remote_dst="${SSH_TARGET}:${REMOTE_DIR%/}/"
   log "Syncing repository to ${remote_dst}"
@@ -129,8 +207,10 @@ if [[ -n "${SSH_TARGET}" && "${LOCAL_INSTALL}" == "false" ]]; then
     --exclude ".git/" \
     --exclude "build/" \
     --exclude "cmake-build-*/" \
+    -e "ssh -o ControlMaster=auto -o ControlPersist=10m -o ControlPath=${SSH_CONTROL_PATH}" \
     "${local_src}" "${remote_dst}"
 
+  # Forward relevant toggles to the remote installer invocation.
   remote_cmd=(
     bash "${REMOTE_DIR%/}/scripts/install_assistantd.sh"
     --local-install
@@ -148,13 +228,26 @@ if [[ -n "${SSH_TARGET}" && "${LOCAL_INSTALL}" == "false" ]]; then
     remote_cmd+=(--no-build)
   fi
 
+  # Run remote install with optional TTY so remote sudo can prompt.
   quoted_remote_cmd="$(printf "%q " "${remote_cmd[@]}")"
-  log "Running remote installer on ${SSH_TARGET}"
-  ssh "${SSH_TARGET}" "${quoted_remote_cmd}"
+  log "Running remote installer on ${SSH_TARGET} via SSH control connection"
+  ssh_cmd=(
+    ssh
+    -o ControlMaster=auto
+    -o ControlPersist=10m
+    -o ControlPath="${SSH_CONTROL_PATH}"
+  )
+  if [[ "${SSH_TTY}" == "true" ]]; then
+    # Force TTY so remote sudo can prompt for password when needed.
+    ssh_cmd+=(-tt)
+  fi
+  ssh_cmd+=("${SSH_TARGET}" "${quoted_remote_cmd}")
+  "${ssh_cmd[@]}"
   log "Remote install completed on ${SSH_TARGET}"
   exit 0
 fi
 
+# Local install mode (either directly on host or called via SSH deploy mode).
 if [[ ! -f "${UNIT_SRC}" ]]; then
   echo "Cannot find systemd unit at ${UNIT_SRC}" >&2
   exit 1
@@ -164,14 +257,18 @@ if [[ ! -f "${CONFIG_SRC}" ]]; then
   exit 1
 fi
 
+# Prime sudo credentials once before privileged operations.
+init_sudo_session
+
+# Install build/runtime packages if requested.
 if [[ "${SKIP_PACKAGES}" == "false" ]]; then
-  require_cmd sudo
   require_cmd apt-get
   log "Installing build/runtime dependencies via apt-get"
-  sudo apt-get update
-  sudo apt-get install -y build-essential cmake
+  "${SUDO_CMD[@]}" apt-get update
+  "${SUDO_CMD[@]}" apt-get install -y build-essential cmake
 fi
 
+# Build the daemon unless caller provided --no-build.
 if [[ "${NO_BUILD}" == "false" ]]; then
   require_cmd cmake
   log "Configuring CMake project"
@@ -186,35 +283,39 @@ if [[ ! -x "${BINARY_PATH}" ]]; then
   exit 1
 fi
 
+# Install binary and required runtime directories.
 log "Installing binary and runtime directories"
-sudo install -m 755 "${BINARY_PATH}" /usr/local/bin/assistantd
-sudo install -d -m 755 /etc/local-ai-assistant
-sudo install -d -m 755 /var/lib/local-ai-assistant
+"${SUDO_CMD[@]}" install -m 755 "${BINARY_PATH}" /usr/local/bin/assistantd
+"${SUDO_CMD[@]}" install -d -m 755 /etc/local-ai-assistant
+"${SUDO_CMD[@]}" install -d -m 755 /var/lib/local-ai-assistant
 
 if [[ ! -f /etc/local-ai-assistant/assistantd.env ]]; then
   log "Installing default config to /etc/local-ai-assistant/assistantd.env"
-  sudo install -m 644 "${CONFIG_SRC}" /etc/local-ai-assistant/assistantd.env
+  "${SUDO_CMD[@]}" install -m 644 "${CONFIG_SRC}" /etc/local-ai-assistant/assistantd.env
 else
+  # Preserve existing config on upgrades.
   log "Keeping existing config at /etc/local-ai-assistant/assistantd.env"
 fi
 
+# Render unit with selected service user/group, then install it.
 tmp_unit="$(mktemp)"
 sed \
   -e "s/^User=.*/User=${SERVICE_USER}/" \
   -e "s/^Group=.*/Group=${SERVICE_GROUP}/" \
   "${UNIT_SRC}" > "${tmp_unit}"
-sudo install -m 644 "${tmp_unit}" /etc/systemd/system/assistantd.service
+"${SUDO_CMD[@]}" install -m 644 "${tmp_unit}" /etc/systemd/system/assistantd.service
 rm -f "${tmp_unit}"
 
 log "Reloading systemd units"
-sudo systemctl daemon-reload
+"${SUDO_CMD[@]}" systemctl daemon-reload
 
+# Enable and start service by default, unless explicitly disabled.
 if [[ "${SKIP_ENABLE}" == "true" ]]; then
   log "Skipping service enable/start (--skip-enable)"
 else
   log "Enabling and starting assistantd"
-  sudo systemctl enable --now assistantd
-  sudo systemctl status assistantd --no-pager || true
+  "${SUDO_CMD[@]}" systemctl enable --now assistantd
+  "${SUDO_CMD[@]}" systemctl status assistantd --no-pager || true
 fi
 
 log "Install finished."
