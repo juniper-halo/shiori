@@ -68,7 +68,8 @@ assistantd_status_t assistantd_config_init_defaults(assistantd_config_t *config)
   copy_config_value(config->whisper_bin, sizeof(config->whisper_bin), "/usr/local/bin/whisper-cli");
   copy_config_value(config->whisper_model_path, sizeof(config->whisper_model_path), "/opt/models/whisper.gguf");
   copy_config_value(config->llm_api_base_url, sizeof(config->llm_api_base_url), "http://127.0.0.1:8080/v1");
-  copy_config_value(config->llm_model, sizeof(config->llm_model), "local-default-model");
+  copy_config_value(config->llm_model, sizeof(config->llm_model), "SmolLM2-1.7B-Instruct-Q4_K_M");
+  copy_config_value(config->llm_system_prompt_path, sizeof(config->llm_system_prompt_path), "/etc/local-ai-assistant/system_prompt.txt");
   copy_config_value(config->tts_bin, sizeof(config->tts_bin), "/usr/local/bin/piper");
   copy_config_value(config->tts_voice_path, sizeof(config->tts_voice_path), "/opt/models/piper-voice.onnx");
   config->vad_aggressiveness = 2;
@@ -119,6 +120,8 @@ assistantd_status_t assistantd_config_load_file(assistantd_config_t *config, con
       copy_config_value(config->llm_api_base_url, sizeof(config->llm_api_base_url), value);
     } else if (strcmp(key, "LLM_MODEL") == 0) {
       copy_config_value(config->llm_model, sizeof(config->llm_model), value);
+    } else if (strcmp(key, "LLM_SYSTEM_PROMPT_PATH") == 0) {
+      copy_config_value(config->llm_system_prompt_path, sizeof(config->llm_system_prompt_path), value);
     } else if (strcmp(key, "TTS_BIN") == 0) {
       copy_config_value(config->tts_bin, sizeof(config->tts_bin), value);
     } else if (strcmp(key, "TTS_VOICE_PATH") == 0) {
@@ -148,8 +151,8 @@ assistantd_status_t assistantd_config_validate(const assistantd_config_t *config
 
   if (config->runtime_dir[0] == '\0' || config->whisper_bin[0] == '\0' ||
       config->whisper_model_path[0] == '\0' || config->llm_api_base_url[0] == '\0' ||
-      config->llm_model[0] == '\0' || config->tts_bin[0] == '\0' ||
-      config->tts_voice_path[0] == '\0') {
+      config->llm_model[0] == '\0' || config->llm_system_prompt_path[0] == '\0' ||
+      config->tts_bin[0] == '\0' || config->tts_voice_path[0] == '\0') {
     return ASSISTANTD_ERR_CONFIG;
   }
 
@@ -176,6 +179,7 @@ void assistantd_config_dump(const assistantd_config_t *config, FILE *stream) {
   fprintf(stream, "WHISPER_MODEL_PATH=%s\n", config->whisper_model_path);
   fprintf(stream, "LLM_API_BASE_URL=%s\n", config->llm_api_base_url);
   fprintf(stream, "LLM_MODEL=%s\n", config->llm_model);
+  fprintf(stream, "LLM_SYSTEM_PROMPT_PATH=%s\n", config->llm_system_prompt_path);
   fprintf(stream, "TTS_BIN=%s\n", config->tts_bin);
   fprintf(stream, "TTS_VOICE_PATH=%s\n", config->tts_voice_path);
   fprintf(stream, "VAD_AGGRESSIVENESS=%d\n", config->vad_aggressiveness);

@@ -16,6 +16,7 @@ typedef struct {
   char whisper_model_path[ASSISTANTD_CONFIG_VALUE_MAX];
   char llm_api_base_url[ASSISTANTD_CONFIG_VALUE_MAX];
   char llm_model[ASSISTANTD_CONFIG_VALUE_MAX];
+  char llm_system_prompt_path[ASSISTANTD_CONFIG_VALUE_MAX];
   char tts_bin[ASSISTANTD_CONFIG_VALUE_MAX];
   char tts_voice_path[ASSISTANTD_CONFIG_VALUE_MAX];
   int vad_aggressiveness;
