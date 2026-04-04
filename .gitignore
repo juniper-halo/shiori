@@ -21,4 +21,7 @@ compile_commands.json
 *.wav
 *.log
 
+# Model weights (large binary files, never commit)
+models/
+
 .env

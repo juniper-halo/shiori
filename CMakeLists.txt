@@ -13,9 +13,11 @@ else()
 endif()
 
 include(CTest)
+find_package(CURL REQUIRED)
 
 add_library(
   assistantd_core
+  src/third_party/cJSON/cJSON.c
   src/assistantd/status.c
   src/assistantd/logger.c
   src/assistantd/config.c
@@ -31,6 +33,8 @@ add_library(
 )
 
 target_include_directories(assistantd_core PUBLIC include)
+target_include_directories(assistantd_core PRIVATE src/third_party/cJSON)
+target_link_libraries(assistantd_core PRIVATE CURL::libcurl)
 
 add_executable(assistantd src/assistantd/main.c)
 target_link_libraries(assistantd PRIVATE assistantd_core)
@@ -47,4 +51,8 @@ if(BUILD_TESTING)
   add_executable(test_supervisor_shape tests/c/test_supervisor_shape.c)
   target_link_libraries(test_supervisor_shape PRIVATE assistantd_core)
   add_test(NAME supervisor_shape COMMAND test_supervisor_shape)
+
+  add_executable(test_llm_adapter_shape tests/c/test_llm_adapter_shape.c)
+  target_link_libraries(test_llm_adapter_shape PRIVATE assistantd_core)
+  add_test(NAME llm_adapter_shape COMMAND test_llm_adapter_shape)
 endif()
