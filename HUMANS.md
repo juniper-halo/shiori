@@ -3,13 +3,15 @@
 ## What This Repository Is
 This repository contains the **human-facing guide** for working on `assistantd`, a local-only C daemon scaffold for Raspberry Pi voice interaction.
 
-Current state is intentionally scaffold-first:
+Current state is **scaffold-first with Phase 3 LLM progress**:
 1. The project compiles.
 2. The daemon has stable interfaces.
-3. Runtime modules contain implementation-playbook TODOs.
-4. End-to-end voice behavior is **not** fully implemented yet.
+3. **LLM adapter** (`llm_adapter`): implemented — loads `LLM_SYSTEM_PROMPT_PATH`, POSTs OpenAI-style chat completions to `LLM_API_BASE_URL` with libcurl + cJSON, 40s timeout, optional shutdown abort via `assistantd_llm_set_shutdown_flag`. Vendored cJSON; CMake links libcurl.
+4. **System prompt** for Baymax-style behavior lives in `config/system_prompt.txt`; production path is configured via `LLM_SYSTEM_PROMPT_PATH` in the env file.
+5. **Local GGUF model** (e.g. SmolLM2-1.7B-Instruct Q4_K_M) is expected under `models/` (gitignored); run **llama-server** separately — it is not built by this repo.
+6. End-to-end voice behavior (capture → VAD → STT → **supervisor-wired** LLM → TTS → playback) is **not** fully implemented yet; supervisor `run_once` remains a TODO boundary.
 
-This is a deliberate design phase so architecture and contracts are solid before performance-sensitive implementation work begins.
+This mix keeps contracts stable while the model adapter and prompt path are real for local testing against llama-server.
 
 ## One-Screen Mental Model
 `assistantd` is intended to become an always-listening local pipeline:
@@ -20,7 +22,7 @@ This is a deliberate design phase so architecture and contracts are solid before
 5. Synthesize response with TTS.
 6. Play output audio.
 
-In this scaffold phase, those stages exist as module boundaries and status-driven stubs.
+STT/TTS/capture/VAD remain stubs or partial; the LLM stage can talk to a running llama-server when `assistantd_llm_generate` is invoked with valid config.
 
 ## Architecture Diagrams
 ### 1) System-level component map
@@ -34,10 +36,11 @@ flowchart LR
         Journal["journald logs"]
     end
 
-    subgraph ChildProc["Child Processes (planned runtime)"]
+    subgraph ChildProc["Child processes and local services"]
         Capture["arecord\nPCM stream"]
         STT["whisper.cpp\ntranscribe"]
-        LLM["Local LLM adapter\n(abstract now)"]
+        LlamaSrv["llama-server\nOpenAI-compatible HTTP\nmodels/*.gguf"]
+        LLM["llm_adapter\nin assistantd\nHTTP client"]
         TTS["piper\nsynthesize"]
         Play["aplay/sox\nplayback"]
     end
@@ -49,6 +52,7 @@ flowchart LR
     Daemon --> Capture
     Daemon --> STT
     Daemon --> LLM
+    LLM -->|HTTP POST| LlamaSrv
     Daemon --> TTS
     Daemon --> Play
 ```
@@ -98,16 +102,20 @@ flowchart LR
 - Fail-fast behavior is preferred over silent fallback.
 
 ## Repository Map
-- `CMakeLists.txt`: canonical build graph and test targets.
+- `CMakeLists.txt`: canonical build graph, `find_package(CURL)`, vendored `src/third_party/cJSON/cJSON.c`, test targets.
 - `include/assistantd/`: public module interfaces.
 - `src/assistantd/`: module implementations and TODO playbooks.
-- `tests/c/`: shape/contract tests for scaffold behavior.
-- `config/assistantd.env.example`: environment contract for daemon startup.
+- `src/third_party/cJSON/`: vendored cJSON (JSON for LLM request/response).
+- `tests/c/`: shape/contract tests (`test_llm_adapter_shape.c` for LLM).
+- `config/assistantd.env.example`: environment contract including `LLM_*` and `LLM_SYSTEM_PROMPT_PATH`.
+- `config/system_prompt.txt`: default Baymax-style system prompt content (copy or symlink for deployment).
+- `models/`: local GGUF weights (gitignored); e.g. `SmolLM2-1.7B-Instruct-Q4_K_M.gguf` — not committed.
+- `docs/jack_log.txt`: contributor work log (optional).
 - `systemd/assistantd.service`: service unit scaffold.
 - `scripts/install_assistantd.sh`: installation scaffold script.
 - `docs/daemon-scaffold.md`: short status summary.
 - `README.md`: concise project overview.
-- `AGENTS.md`: agent-oriented execution rules.
+- `AGENTS.md`: agent-oriented execution rules and LLM commands.
 
 ## Build and Test Workflow
 ### Prerequisites
@@ -115,6 +123,8 @@ Install these tools on your machine:
 1. C compiler with C17 support (`clang` or `gcc`).
 2. CMake >= 3.20.
 3. CTest (typically bundled with CMake).
+4. **libcurl** development package so CMake can find CURL (e.g. Raspberry Pi OS: `libcurl4-openssl-dev`).
+5. For local LLM inference tests: **llama.cpp** `llama-server` binary and a GGUF model under `models/` (see `AGENTS.md`).
 
 ### Configure
 ```bash
@@ -138,8 +148,8 @@ ctest --test-dir build --output-on-failure
 
 Expected current behavior:
 - daemon initializes config and supervisor.
-- supervisor hits TODO boundary (`ASSISTANTD_ERR_UNIMPLEMENTED`).
-- process exits cleanly with scaffold log messages.
+- supervisor `run_once` still hits TODO boundary (`ASSISTANTD_ERR_UNIMPLEMENTED`) until Phase 4 wiring.
+- LLM code paths are testable via `test_llm_adapter_shape` and manual runs against llama-server when env points at a readable prompt file and `LLM_API_BASE_URL` / `LLM_MODEL` match the server.
 
 ## Configuration Contract (Current)
 Primary keys in `config/assistantd.env.example`:
@@ -151,8 +161,9 @@ Primary keys in `config/assistantd.env.example`:
 | `AUDIO_DEVICE` | capture/playback target | non-empty |
 | `WHISPER_BIN` | STT executable path | non-empty |
 | `WHISPER_MODEL_PATH` | STT model path | non-empty |
-| `LLM_API_BASE_URL` | local LLM API base URL | non-empty |
-| `LLM_MODEL` | LLM identifier | non-empty |
+| `LLM_API_BASE_URL` | local OpenAI-compatible API base (e.g. `http://127.0.0.1:8080/v1`) | non-empty |
+| `LLM_MODEL` | model id for chat completions (e.g. `SmolLM2-1.7B-Instruct-Q4_K_M`) | non-empty |
+| `LLM_SYSTEM_PROMPT_PATH` | filesystem path to system prompt text file | non-empty |
 | `TTS_BIN` | TTS executable path | non-empty |
 | `TTS_VOICE_PATH` | TTS voice model path | non-empty |
 | `VAD_AGGRESSIVENESS` | VAD sensitivity | integer 0..3 |
@@ -204,8 +215,9 @@ It should evolve to:
 - Whisper process invocation/parsing is TODO.
 
 ### LLM (`llm_adapter.c/.h`)
-- Abstract local adapter contract exists.
-- Concrete transport/runtime implementation is TODO.
+- **Implemented:** loads system prompt from `LLM_SYSTEM_PROMPT_PATH`; stores `LLM_API_BASE_URL` and `LLM_MODEL`; persistent libcurl handle; `generate()` POSTs JSON to `{base}/chat/completions`, parses `choices[0].message.content`; 40s timeout; optional shutdown via `assistantd_llm_set_shutdown_flag` + curl progress callback.
+- **Not done:** supervisor pipeline does not yet pass STT transcript into `llm_generate` in a loop (Phase 4).
+- **Runtime:** requires **llama-server** (or compatible server) with matching model; weights live in `models/` locally, not in git.
 
 ### TTS (`tts_adapter.c/.h`)
 - Adapter contract exists.
@@ -229,15 +241,17 @@ Current tests are intentionally **shape tests**, not full integration tests.
 - `test_ring_buffer_shape.c`: verifies basic API behavior and data flow.
 - `test_config_shape.c`: verifies config defaults/validation and local-mode enforcement.
 - `test_supervisor_shape.c`: verifies scaffold lifecycle and explicit TODO boundary behavior.
+- `test_llm_adapter_shape.c`: verifies LLM init (prompt file, curl), generate error paths, shutdown, shutdown-flag setter.
 
 These tests are guardrails for architecture stability while implementation fills in.
 
 ## CI: What It Enforces
 CI currently checks:
-1. CMake configure succeeds.
-2. Build succeeds.
-3. C tests run.
-4. TODO playbook blocks exist in scaffold modules.
+1. Ubuntu runner installs `libcurl4-openssl-dev` (for CMake `find_package(CURL)`).
+2. CMake configure succeeds.
+3. Build succeeds.
+4. C tests run.
+5. TODO playbook blocks exist in scaffold modules.
 
 This keeps the scaffold discipline intact while implementation is still in progress.
 
@@ -259,7 +273,7 @@ Use this order to reduce churn and keep modules independently verifiable.
 
 ### Phase 3: Model adapters and reply path
 1. Implement `stt_adapter` subprocess contract and transcript extraction.
-2. Implement `llm_adapter` concrete local transport behind current abstract interface.
+2. **`llm_adapter`:** local HTTP transport to OpenAI-compatible server — **done** (libcurl + cJSON, system prompt file, timeout/shutdown). Remaining: optional integration tests with mocked server or fixture HTTP.
 3. Implement `tts_adapter` subprocess contract with timeout/error mapping.
 4. Implement `playback` stage and device/busy-state handling.
 5. Add per-stage integration tests with fixture/mocked subprocess behavior.
@@ -279,6 +293,12 @@ Use this order to reduce churn and keep modules independently verifiable.
 ## Troubleshooting
 ### Build fails with missing CMake/CTest
 Install CMake toolchain and rerun configure/build commands.
+
+### CMake fails: Could not find CURL
+Install libcurl development headers. On Debian/Raspberry Pi OS: `sudo apt install libcurl4-openssl-dev`. On macOS, Xcode Command Line Tools usually provide CMake’s `FindCURL` target.
+
+### LLM generate fails at runtime
+Ensure **llama-server** is running with the same `LLM_API_BASE_URL` and `LLM_MODEL` as in your env file, and that `LLM_SYSTEM_PROMPT_PATH` points to a readable file. See `AGENTS.md` for example `llama-server` and `curl` commands.
 
 ### Daemon exits quickly
 Expected in scaffold phase when supervisor hits unimplemented pipeline path.
