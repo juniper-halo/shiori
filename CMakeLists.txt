@@ -18,6 +18,7 @@ find_package(CURL REQUIRED)
 add_library(
   assistantd_core
   src/third_party/cJSON/cJSON.c
+  src/third_party/dr_wav/dr_wav.c
   src/third_party/libfvad/src/fvad.c
   src/third_party/libfvad/src/signal_processing/division_operations.c
   src/third_party/libfvad/src/signal_processing/energy.c
@@ -34,6 +35,7 @@ add_library(
   src/assistantd/logger.c
   src/assistantd/config.c
   src/assistantd/ring_buffer.c
+  src/assistantd/utilities/artifact_queue.c
   src/assistantd/audio_capture.c
   src/assistantd/vad_detector.c
   src/assistantd/stt_adapter.c
@@ -46,6 +48,7 @@ add_library(
 
 target_include_directories(assistantd_core PUBLIC include)
 target_include_directories(assistantd_core PRIVATE src/third_party/cJSON)
+target_include_directories(assistantd_core PRIVATE src/third_party/dr_wav)
 target_include_directories(assistantd_core PRIVATE src/third_party/libfvad/include)
 target_include_directories(assistantd_core PRIVATE src/third_party/libfvad/src)
 target_link_libraries(assistantd_core PRIVATE CURL::libcurl)
