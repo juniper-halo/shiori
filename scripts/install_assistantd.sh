@@ -265,7 +265,10 @@ if [[ "${SKIP_PACKAGES}" == "false" ]]; then
   require_cmd apt-get
   log "Installing build/runtime dependencies via apt-get"
   "${SUDO_CMD[@]}" apt-get update
-  "${SUDO_CMD[@]}" apt-get install -y build-essential cmake
+  "${SUDO_CMD[@]}" apt-get install -y \
+    build-essential \
+    cmake \
+    libcurl4-openssl-dev
 fi
 
 # Build the daemon unless caller provided --no-build.

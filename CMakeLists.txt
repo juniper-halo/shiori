@@ -18,6 +18,18 @@ find_package(CURL REQUIRED)
 add_library(
   assistantd_core
   src/third_party/cJSON/cJSON.c
+  src/third_party/libfvad/src/fvad.c
+  src/third_party/libfvad/src/signal_processing/division_operations.c
+  src/third_party/libfvad/src/signal_processing/energy.c
+  src/third_party/libfvad/src/signal_processing/get_scaling_square.c
+  src/third_party/libfvad/src/signal_processing/resample_48khz.c
+  src/third_party/libfvad/src/signal_processing/resample_by_2_internal.c
+  src/third_party/libfvad/src/signal_processing/resample_fractional.c
+  src/third_party/libfvad/src/signal_processing/spl_inl.c
+  src/third_party/libfvad/src/vad/vad_core.c
+  src/third_party/libfvad/src/vad/vad_filterbank.c
+  src/third_party/libfvad/src/vad/vad_gmm.c
+  src/third_party/libfvad/src/vad/vad_sp.c
   src/assistantd/status.c
   src/assistantd/logger.c
   src/assistantd/config.c
@@ -34,6 +46,8 @@ add_library(
 
 target_include_directories(assistantd_core PUBLIC include)
 target_include_directories(assistantd_core PRIVATE src/third_party/cJSON)
+target_include_directories(assistantd_core PRIVATE src/third_party/libfvad/include)
+target_include_directories(assistantd_core PRIVATE src/third_party/libfvad/src)
 target_link_libraries(assistantd_core PRIVATE CURL::libcurl)
 
 add_executable(assistantd src/assistantd/main.c)
@@ -57,6 +71,10 @@ if(BUILD_TESTING)
   add_executable(test_audio_capture_shape tests/c/test_audio_capture_shape.c)
   target_link_libraries(test_audio_capture_shape PRIVATE assistantd_core)
   add_test(NAME audio_capture_shape COMMAND test_audio_capture_shape)
+
+  add_executable(test_vad_detector_shape tests/c/test_vad_detector_shape.c)
+  target_link_libraries(test_vad_detector_shape PRIVATE assistantd_core)
+  add_test(NAME vad_detector_shape COMMAND test_vad_detector_shape)
 
   add_executable(test_supervisor_shape tests/c/test_supervisor_shape.c)
   target_link_libraries(test_supervisor_shape PRIVATE assistantd_core)

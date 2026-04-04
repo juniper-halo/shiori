@@ -74,6 +74,7 @@ static void assistantd_supervisor_shutdown_modules(assistantd_supervisor_t *supe
 
   (void)assistantd_audio_capture_stop(&supervisor->capture);
   assistantd_ring_buffer_free(&supervisor->capture_ring);
+  (void)assistantd_vad_shutdown(&supervisor->vad);
   (void)assistantd_stt_shutdown(&supervisor->stt);
   (void)assistantd_llm_shutdown(&supervisor->llm);
   (void)assistantd_tts_shutdown(&supervisor->tts);
