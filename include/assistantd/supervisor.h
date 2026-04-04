@@ -4,6 +4,7 @@
 #include "assistantd/audio_capture.h"
 #include "assistantd/config.h"
 #include "assistantd/llm_adapter.h"
+#include "assistantd/ring_buffer.h"
 #include "assistantd/status.h"
 #include "assistantd/stt_adapter.h"
 #include "assistantd/tts_adapter.h"
@@ -21,6 +22,7 @@ typedef struct {
   assistantd_supervisor_state_t state;
   const assistantd_config_t *config;
   assistantd_audio_capture_t capture;
+  assistantd_ring_buffer_t capture_ring;
   assistantd_vad_detector_t vad;
   assistantd_stt_adapter_t stt;
   assistantd_llm_adapter_t llm;

@@ -54,6 +54,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_config_shape PRIVATE assistantd_core)
   add_test(NAME config_shape COMMAND test_config_shape)
 
+  add_executable(test_audio_capture_shape tests/c/test_audio_capture_shape.c)
+  target_link_libraries(test_audio_capture_shape PRIVATE assistantd_core)
+  add_test(NAME audio_capture_shape COMMAND test_audio_capture_shape)
+
   add_executable(test_supervisor_shape tests/c/test_supervisor_shape.c)
   target_link_libraries(test_supervisor_shape PRIVATE assistantd_core)
   add_test(NAME supervisor_shape COMMAND test_supervisor_shape)
