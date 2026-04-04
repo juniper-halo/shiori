@@ -2,6 +2,7 @@
 #define ASSISTANTD_RING_BUFFER_H
 
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 #include "assistantd/status.h"
@@ -9,9 +10,10 @@
 typedef struct {
   uint8_t *data;
   size_t capacity;
-  size_t head;
-  size_t tail;
-  size_t size;
+  atomic_size_t head;
+  atomic_size_t tail;
+  atomic_size_t overflow;
+  atomic_size_t underflow;
 } assistantd_ring_buffer_t;
 
 assistantd_status_t assistantd_ring_buffer_init(assistantd_ring_buffer_t *buffer, size_t capacity);

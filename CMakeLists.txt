@@ -40,9 +40,15 @@ add_executable(assistantd src/assistantd/main.c)
 target_link_libraries(assistantd PRIVATE assistantd_core)
 
 if(BUILD_TESTING)
+  find_package(Threads REQUIRED)
+
   add_executable(test_ring_buffer_shape tests/c/test_ring_buffer_shape.c)
   target_link_libraries(test_ring_buffer_shape PRIVATE assistantd_core)
   add_test(NAME ring_buffer_shape COMMAND test_ring_buffer_shape)
+
+  add_executable(test_ring_buffer_spsc tests/c/test_ring_buffer_spsc.c)
+  target_link_libraries(test_ring_buffer_spsc PRIVATE assistantd_core Threads::Threads)
+  add_test(NAME ring_buffer_spsc COMMAND test_ring_buffer_spsc)
 
   add_executable(test_config_shape tests/c/test_config_shape.c)
   target_link_libraries(test_config_shape PRIVATE assistantd_core)
