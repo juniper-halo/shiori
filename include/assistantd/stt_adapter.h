@@ -6,6 +6,8 @@
 
 typedef struct {
   int initialized;
+  char whisper_bin[ASSISTANTD_CONFIG_VALUE_MAX];
+  char whisper_model_path[ASSISTANTD_CONFIG_VALUE_MAX];
 } assistantd_stt_adapter_t;
 
 typedef struct {
