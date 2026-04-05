@@ -9,20 +9,21 @@ Current state is **scaffold-first with Phase 3 LLM progress**:
 3. **LLM adapter** (`llm_adapter`): implemented — loads `LLM_SYSTEM_PROMPT_PATH`, POSTs OpenAI-style chat completions to `LLM_API_BASE_URL` with libcurl + cJSON, 40s timeout, optional shutdown abort via `assistantd_llm_set_shutdown_flag`. Vendored cJSON; CMake links libcurl.
 4. **System prompt** for Baymax-style behavior lives in `config/system_prompt.txt`; production path is configured via `LLM_SYSTEM_PROMPT_PATH` in the env file.
 5. **Local GGUF model** (e.g. SmolLM2-1.7B-Instruct Q4_K_M) is expected under `models/` (gitignored); run **llama-server** separately — it is not built by this repo.
-6. End-to-end voice behavior (capture → VAD → STT → **supervisor-wired** LLM → TTS → playback) is **not** fully implemented yet; supervisor `run_once` remains a TODO boundary.
+6. **Audio capture** supports two modes: `arecord` (default) and development `network_tcp` on Pi loopback (`127.0.0.1`), intended for SSH-tunneled audio from a Mac.
+7. End-to-end voice behavior (capture → VAD → STT → **supervisor-wired** LLM → TTS → playback) is **not** fully implemented yet; `DEV_PIPELINE_MODE=stt_only` can keep capture→VAD→STT running for dev transcript iteration.
 
 This mix keeps contracts stable while the model adapter and prompt path are real for local testing against llama-server.
 
 ## One-Screen Mental Model
 `assistantd` is intended to become an always-listening local pipeline:
-1. Capture PCM audio from microphone.
+1. Capture PCM audio from microphone (`arecord`) or from dev loopback TCP stream (`network_tcp`).
 2. Detect speech start/end via VAD.
 3. Transcribe utterance with STT.
 4. Generate response with local LLM adapter.
 5. Synthesize response with TTS.
 6. Play output audio.
 
-STT/TTS/capture/VAD remain stubs or partial; the LLM stage can talk to a running llama-server when `assistantd_llm_generate` is invoked with valid config.
+Capture/VAD/STT are now usable for local and dev-loopback iteration, while TTS/playback remain stubs; the LLM stage can talk to a running llama-server when `assistantd_llm_generate` is invoked with valid config.
 
 ## Architecture Diagrams
 ### 1) System-level component map
@@ -37,7 +38,7 @@ flowchart LR
     end
 
     subgraph ChildProc["Child processes and local services"]
-        Capture["arecord\nPCM stream"]
+        Capture["arecord or network_tcp\nPCM stream"]
         STT["whisper.cpp\ntranscribe"]
         LlamaSrv["llama-server\nOpenAI-compatible HTTP\nmodels/*.gguf"]
         LLM["llm_adapter\nin assistantd\nHTTP client"]
@@ -113,6 +114,7 @@ flowchart LR
 - `docs/jack_log.txt`: contributor work log (optional).
 - `systemd/assistantd.service`: service unit scaffold.
 - `scripts/install_assistantd.sh`: installation scaffold script.
+- `scripts/mac_stream_audio.sh`: macOS microphone sender for dev `network_tcp` capture mode.
 - `docs/daemon-scaffold.md`: short status summary.
 - `README.md`: concise project overview.
 - `AGENTS.md`: agent-oriented execution rules and LLM commands.
@@ -146,9 +148,25 @@ ctest --test-dir build --output-on-failure
 ./build/assistantd --config ./config/assistantd.env.example --foreground
 ```
 
+### Dev workflow: Mac microphone over SSH tunnel
+1. On the Pi config file, set:
+   - `AUDIO_INPUT_MODE=network_tcp`
+   - `AUDIO_NETWORK_PORT=5555`
+   - `DEV_PIPELINE_MODE=stt_only`
+2. From the Mac, open tunnel to Pi loopback listener:
+```bash
+ssh -N -L 5555:127.0.0.1:5555 pi@<pi-host>
+```
+3. From the Mac, stream microphone PCM (`S16_LE`, mono, 16kHz):
+```bash
+scripts/mac_stream_audio.sh --host 127.0.0.1 --port 5555
+```
+4. On the Pi, run `assistantd` in foreground; transcripts will be logged continuously in `stt_only` mode.
+
 Expected current behavior:
 - daemon initializes config and supervisor.
-- supervisor `run_once` still hits TODO boundary (`ASSISTANTD_ERR_UNIMPLEMENTED`) until Phase 4 wiring.
+- default mode (`DEV_PIPELINE_MODE=scaffold`) still hits TODO boundary (`ASSISTANTD_ERR_UNIMPLEMENTED`) after STT.
+- development mode (`DEV_PIPELINE_MODE=stt_only`) continues capture -> VAD -> STT, skips LLM/TTS init, and logs transcripts continuously.
 - LLM code paths are testable via `test_llm_adapter_shape` and manual runs against llama-server when env points at a readable prompt file and `LLM_API_BASE_URL` / `LLM_MODEL` match the server.
 
 ## Configuration Contract (Current)
@@ -158,14 +176,17 @@ Primary keys in `config/assistantd.env.example`:
 |---|---|---|
 | `ASSISTANT_MODE` | runtime mode selector | must be `local` |
 | `RUNTIME_DIR` | runtime artifacts and temp files | non-empty |
+| `AUDIO_INPUT_MODE` | capture backend selector | `arecord` or `network_tcp` |
 | `AUDIO_DEVICE` | capture/playback target | non-empty |
+| `AUDIO_NETWORK_PORT` | loopback TCP port for `network_tcp` capture | integer 1..65535 (required for `network_tcp`) |
+| `DEV_PIPELINE_MODE` | supervisor dev behavior gate | `scaffold` or `stt_only` |
 | `WHISPER_BIN` | STT executable path | non-empty |
 | `WHISPER_MODEL_PATH` | STT model path | non-empty |
-| `LLM_API_BASE_URL` | local OpenAI-compatible API base (e.g. `http://127.0.0.1:8080/v1`) | non-empty |
-| `LLM_MODEL` | model id for chat completions (e.g. `SmolLM2-1.7B-Instruct-Q4_K_M`) | non-empty |
-| `LLM_SYSTEM_PROMPT_PATH` | filesystem path to system prompt text file | non-empty |
-| `TTS_BIN` | TTS executable path | non-empty |
-| `TTS_VOICE_PATH` | TTS voice model path | non-empty |
+| `LLM_API_BASE_URL` | local OpenAI-compatible API base (e.g. `http://127.0.0.1:8080/v1`) | non-empty in `scaffold` mode |
+| `LLM_MODEL` | model id for chat completions (e.g. `SmolLM2-1.7B-Instruct-Q4_K_M`) | non-empty in `scaffold` mode |
+| `LLM_SYSTEM_PROMPT_PATH` | filesystem path to system prompt text file | non-empty in `scaffold` mode |
+| `TTS_BIN` | TTS executable path | non-empty in `scaffold` mode |
+| `TTS_VOICE_PATH` | TTS voice model path | non-empty in `scaffold` mode |
 | `VAD_AGGRESSIVENESS` | VAD sensitivity | integer 0..3 |
 | `VAD_SILENCE_MS` | speech-end silence threshold | integer 100..5000 |
 
@@ -203,16 +224,17 @@ It should evolve to:
 - TODOs define atomic/concurrency hardening work.
 
 ### Audio capture (`audio_capture.c/.h`)
-- Interface exists.
-- Process management behavior is TODO.
+- `arecord` subprocess mode is implemented (non-blocking read + teardown).
+- `network_tcp` dev mode is implemented: non-blocking loopback listener on Pi, single client, fixed 20ms frame assembly, disconnect/reconnect handling.
 
 ### VAD (`vad_detector.c/.h`)
-- Interface/state placeholders exist.
-- WebRTC VAD integration is TODO.
+- Implemented with `libfvad` frame classification and start/continue/end transitions.
+- Tuning and environment-specific calibration remain TODO.
 
 ### STT (`stt_adapter.c/.h`)
-- Adapter contract exists.
-- Whisper process invocation/parsing is TODO.
+- Whisper subprocess invocation and transcript parsing are implemented.
+- Returns `ASSISTANTD_ERR_UNIMPLEMENTED` when whisper binary/model are unavailable.
+- Timeout and broader integration-hardening remain TODO.
 
 ### LLM (`llm_adapter.c/.h`)
 - **Implemented:** loads system prompt from `LLM_SYSTEM_PROMPT_PATH`; stores `LLM_API_BASE_URL` and `LLM_MODEL`; persistent libcurl handle; `generate()` POSTs JSON to `{base}/chat/completions`, parses `choices[0].message.content`; 40s timeout; optional shutdown via `assistantd_llm_set_shutdown_flag` + curl progress callback.
@@ -229,7 +251,8 @@ It should evolve to:
 
 ### Supervisor (`supervisor.c/.h`)
 - Lifecycle state machine exists.
-- Full orchestration loop is TODO.
+- Default scaffold mode still returns TODO boundary after STT.
+- `DEV_PIPELINE_MODE=stt_only` keeps capture->VAD->STT running and logs transcripts for dev iteration.
 
 ### Shutdown (`shutdown.c/.h`)
 - Signal handler scaffold exists.
@@ -240,7 +263,8 @@ Current tests are intentionally **shape tests**, not full integration tests.
 
 - `test_ring_buffer_shape.c`: verifies basic API behavior and data flow.
 - `test_config_shape.c`: verifies config defaults/validation and local-mode enforcement.
-- `test_supervisor_shape.c`: verifies scaffold lifecycle and explicit TODO boundary behavior.
+- `test_audio_capture_shape.c`: verifies arecord scaffold behavior and network TCP frame/disconnect/reconnect behavior.
+- `test_supervisor_shape.c`: verifies scaffold lifecycle plus `stt_only` run loop behavior.
 - `test_llm_adapter_shape.c`: verifies LLM init (prompt file, curl), generate error paths, shutdown, shutdown-flag setter.
 
 These tests are guardrails for architecture stability while implementation fills in.
@@ -265,7 +289,7 @@ Use this order to reduce churn and keep modules independently verifiable.
 4. Add state-transition tests for `INIT -> READY -> RUNNING -> STOPPING -> STOPPED`.
 
 ### Phase 2: Audio ingestion and segmentation
-1. Implement `audio_capture` process spawning (`arecord`) and controlled teardown.
+1. Harden `audio_capture` backends (`arecord` + `network_tcp`) with richer diagnostics and long-run stability checks.
 2. Upgrade ring buffer to lock-safe/atomic SPSC behavior under sustained load.
 3. Integrate WebRTC VAD in `vad_detector` with deterministic frame sizing.
 4. Add utterance assembler that emits bounded WAV artifacts per speech segment.
@@ -302,6 +326,12 @@ Ensure **llama-server** is running with the same `LLM_API_BASE_URL` and `LLM_MOD
 
 ### Daemon exits quickly
 Expected in scaffold phase when supervisor hits unimplemented pipeline path.
+
+### No transcripts in network TCP dev mode
+Confirm all of these:
+1. `AUDIO_INPUT_MODE=network_tcp` and `DEV_PIPELINE_MODE=stt_only`.
+2. SSH tunnel is active: `ssh -N -L <port>:127.0.0.1:<port> pi@<pi-host>`.
+3. `scripts/mac_stream_audio.sh` is running on Mac and targeting the tunneled port.
 
 ### Config validation error for mode
 Set `ASSISTANT_MODE=local`.

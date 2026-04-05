@@ -53,7 +53,7 @@
  *   src/third_party/cJSON/         — Vendored cJSON v1.7.18 (MIT) for JSON
  *                                    request construction and response parsing.
  *   CMakeLists.txt                 — Added cJSON source, include path, and
- *                                    find_package(CURL REQUIRED) linkage.
+ *                                    find_package(CURL REQUIRED) linkage.~
  *   tests/c/test_llm_adapter_shape.c — 11 shape tests covering init, generate,
  *                                    shutdown, null args, connection refused,
  *                                    config validation, and shutdown flag.

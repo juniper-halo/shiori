@@ -11,12 +11,15 @@
 typedef struct {
   char assistant_mode[16];
   char runtime_dir[ASSISTANTD_CONFIG_VALUE_MAX];
+  char audio_input_mode[16];
   char audio_device[ASSISTANTD_CONFIG_VALUE_MAX];
+  int audio_network_port;
   char whisper_bin[ASSISTANTD_CONFIG_VALUE_MAX];
   char whisper_model_path[ASSISTANTD_CONFIG_VALUE_MAX];
   char llm_api_base_url[ASSISTANTD_CONFIG_VALUE_MAX];
   char llm_model[ASSISTANTD_CONFIG_VALUE_MAX];
   char llm_system_prompt_path[ASSISTANTD_CONFIG_VALUE_MAX];
+  char dev_pipeline_mode[16];
   char tts_bin[ASSISTANTD_CONFIG_VALUE_MAX];
   char tts_voice_path[ASSISTANTD_CONFIG_VALUE_MAX];
   int vad_aggressiveness;

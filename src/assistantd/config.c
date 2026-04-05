@@ -64,7 +64,9 @@ assistantd_status_t assistantd_config_init_defaults(assistantd_config_t *config)
   memset(config, 0, sizeof(*config));
   copy_config_value(config->assistant_mode, sizeof(config->assistant_mode), "local");
   copy_config_value(config->runtime_dir, sizeof(config->runtime_dir), "/var/lib/local-ai-assistant");
+  copy_config_value(config->audio_input_mode, sizeof(config->audio_input_mode), "arecord");
   copy_config_value(config->audio_device, sizeof(config->audio_device), "default");
+  config->audio_network_port = 5555;
   copy_config_value(config->whisper_bin, sizeof(config->whisper_bin), "/usr/local/bin/whisper-cli");
   copy_config_value(config->whisper_model_path,
                     sizeof(config->whisper_model_path),
@@ -72,6 +74,7 @@ assistantd_status_t assistantd_config_init_defaults(assistantd_config_t *config)
   copy_config_value(config->llm_api_base_url, sizeof(config->llm_api_base_url), "http://127.0.0.1:8080/v1");
   copy_config_value(config->llm_model, sizeof(config->llm_model), "SmolLM2-1.7B-Instruct-Q4_K_M");
   copy_config_value(config->llm_system_prompt_path, sizeof(config->llm_system_prompt_path), "/etc/local-ai-assistant/system_prompt.txt");
+  copy_config_value(config->dev_pipeline_mode, sizeof(config->dev_pipeline_mode), "scaffold");
   copy_config_value(config->tts_bin, sizeof(config->tts_bin), "/usr/local/bin/piper");
   copy_config_value(config->tts_voice_path, sizeof(config->tts_voice_path), "/opt/models/piper-voice.onnx");
   config->vad_aggressiveness = 2;
@@ -112,8 +115,12 @@ assistantd_status_t assistantd_config_load_file(assistantd_config_t *config, con
       copy_config_value(config->assistant_mode, sizeof(config->assistant_mode), value);
     } else if (strcmp(key, "RUNTIME_DIR") == 0) {
       copy_config_value(config->runtime_dir, sizeof(config->runtime_dir), value);
+    } else if (strcmp(key, "AUDIO_INPUT_MODE") == 0) {
+      copy_config_value(config->audio_input_mode, sizeof(config->audio_input_mode), value);
     } else if (strcmp(key, "AUDIO_DEVICE") == 0) {
       copy_config_value(config->audio_device, sizeof(config->audio_device), value);
+    } else if (strcmp(key, "AUDIO_NETWORK_PORT") == 0) {
+      config->audio_network_port = atoi(value);
     } else if (strcmp(key, "WHISPER_BIN") == 0) {
       copy_config_value(config->whisper_bin, sizeof(config->whisper_bin), value);
     } else if (strcmp(key, "WHISPER_MODEL_PATH") == 0) {
@@ -124,6 +131,8 @@ assistantd_status_t assistantd_config_load_file(assistantd_config_t *config, con
       copy_config_value(config->llm_model, sizeof(config->llm_model), value);
     } else if (strcmp(key, "LLM_SYSTEM_PROMPT_PATH") == 0) {
       copy_config_value(config->llm_system_prompt_path, sizeof(config->llm_system_prompt_path), value);
+    } else if (strcmp(key, "DEV_PIPELINE_MODE") == 0) {
+      copy_config_value(config->dev_pipeline_mode, sizeof(config->dev_pipeline_mode), value);
     } else if (strcmp(key, "TTS_BIN") == 0) {
       copy_config_value(config->tts_bin, sizeof(config->tts_bin), value);
     } else if (strcmp(key, "TTS_VOICE_PATH") == 0) {
@@ -151,10 +160,36 @@ assistantd_status_t assistantd_config_validate(const assistantd_config_t *config
     return ASSISTANTD_ERR_CONFIG;
   }
 
+  if (strcmp(config->audio_input_mode, "arecord") != 0 &&
+      strcmp(config->audio_input_mode, "network_tcp") != 0) {
+    assistantd_log(ASSISTANTD_LOG_ERROR,
+                   "AUDIO_INPUT_MODE must be `arecord` or `network_tcp`");
+    return ASSISTANTD_ERR_CONFIG;
+  }
+
+  if (strcmp(config->audio_input_mode, "network_tcp") == 0 &&
+      (config->audio_network_port <= 0 || config->audio_network_port > 65535)) {
+    assistantd_log(ASSISTANTD_LOG_ERROR,
+                   "AUDIO_NETWORK_PORT must be in range 1..65535 for network_tcp mode");
+    return ASSISTANTD_ERR_CONFIG;
+  }
+
+  if (strcmp(config->dev_pipeline_mode, "scaffold") != 0 &&
+      strcmp(config->dev_pipeline_mode, "stt_only") != 0) {
+    assistantd_log(ASSISTANTD_LOG_ERROR,
+                   "DEV_PIPELINE_MODE must be `scaffold` or `stt_only`");
+    return ASSISTANTD_ERR_CONFIG;
+  }
+
   if (config->runtime_dir[0] == '\0' || config->whisper_bin[0] == '\0' ||
-      config->whisper_model_path[0] == '\0' || config->llm_api_base_url[0] == '\0' ||
-      config->llm_model[0] == '\0' || config->llm_system_prompt_path[0] == '\0' ||
-      config->tts_bin[0] == '\0' || config->tts_voice_path[0] == '\0') {
+      config->whisper_model_path[0] == '\0') {
+    return ASSISTANTD_ERR_CONFIG;
+  }
+
+  if (strcmp(config->dev_pipeline_mode, "stt_only") != 0 &&
+      (config->llm_api_base_url[0] == '\0' || config->llm_model[0] == '\0' ||
+       config->llm_system_prompt_path[0] == '\0' || config->tts_bin[0] == '\0' ||
+       config->tts_voice_path[0] == '\0')) {
     return ASSISTANTD_ERR_CONFIG;
   }
 
@@ -176,12 +211,15 @@ void assistantd_config_dump(const assistantd_config_t *config, FILE *stream) {
 
   fprintf(stream, "ASSISTANT_MODE=%s\n", config->assistant_mode);
   fprintf(stream, "RUNTIME_DIR=%s\n", config->runtime_dir);
+  fprintf(stream, "AUDIO_INPUT_MODE=%s\n", config->audio_input_mode);
   fprintf(stream, "AUDIO_DEVICE=%s\n", config->audio_device);
+  fprintf(stream, "AUDIO_NETWORK_PORT=%d\n", config->audio_network_port);
   fprintf(stream, "WHISPER_BIN=%s\n", config->whisper_bin);
   fprintf(stream, "WHISPER_MODEL_PATH=%s\n", config->whisper_model_path);
   fprintf(stream, "LLM_API_BASE_URL=%s\n", config->llm_api_base_url);
   fprintf(stream, "LLM_MODEL=%s\n", config->llm_model);
   fprintf(stream, "LLM_SYSTEM_PROMPT_PATH=%s\n", config->llm_system_prompt_path);
+  fprintf(stream, "DEV_PIPELINE_MODE=%s\n", config->dev_pipeline_mode);
   fprintf(stream, "TTS_BIN=%s\n", config->tts_bin);
   fprintf(stream, "TTS_VOICE_PATH=%s\n", config->tts_voice_path);
   fprintf(stream, "VAD_AGGRESSIVENESS=%d\n", config->vad_aggressiveness);

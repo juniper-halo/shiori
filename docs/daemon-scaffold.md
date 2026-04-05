@@ -5,6 +5,7 @@ This repository now targets a local-only C daemon (`assistantd`) as the active r
 ## Current Phase
 - Compile-ready scaffold only.
 - No full STT/LLM/TTS runtime implementation yet.
+- Development capture mode supports `network_tcp` loopback input for Mac->Pi SSH-tunneled audio.
 - Module-level Doxygen TODO blocks are the implementation playbook.
 
 ## Local-Only Policy

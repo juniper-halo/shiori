@@ -55,6 +55,104 @@ _Static_assert(ASSISTANTD_SUPERVISOR_CAPTURE_CHUNK_BYTES == ASSISTANTD_SUPERVISO
  *   - LLM/TTS consumption of STT outputs remains TODO.
  */
 
+/** @brief True when configured for development STT-only mode. */
+static int assistantd_supervisor_is_stt_only_mode(const assistantd_supervisor_t *supervisor) {
+  return supervisor != NULL && supervisor->config != NULL &&
+         strcmp(supervisor->config->dev_pipeline_mode, "stt_only") == 0;
+}
+
+/** @brief Emit a readable boxed STT transcript to stdout for development feedback. */
+static void assistantd_supervisor_print_boxed_transcript(
+    uint64_t sequence_id,
+    const char *transcript) {
+  static const char *title = "STT Transcript";
+  static const char *empty_transcript = "(empty transcript)";
+  const char *display_transcript = transcript;
+  if (display_transcript == NULL || display_transcript[0] == '\0') {
+    display_transcript = empty_transcript;
+  }
+
+  char sequence_line[64];
+  int sequence_written = snprintf(
+      sequence_line, sizeof(sequence_line), "sequence_id: %" PRIu64, sequence_id);
+  if (sequence_written < 0) {
+    return;
+  }
+  size_t sequence_len = (size_t)sequence_written;
+  if (sequence_len >= sizeof(sequence_line)) {
+    sequence_len = sizeof(sequence_line) - 1;
+  }
+
+  size_t width = strlen(title);
+  if (sequence_len > width) {
+    width = sequence_len;
+  }
+
+  const char *line_cursor = display_transcript;
+  while (line_cursor != NULL) {
+    const char *newline = strchr(line_cursor, '\n');
+    size_t line_len = newline == NULL ? strlen(line_cursor) : (size_t)(newline - line_cursor);
+    if (line_len > width) {
+      width = line_len;
+    }
+    if (newline == NULL) {
+      break;
+    }
+    line_cursor = newline + 1;
+  }
+
+  putchar('+');
+  for (size_t i = 0; i < width + 2; ++i) {
+    putchar('-');
+  }
+  puts("+");
+
+  printf("| %s", title);
+  for (size_t i = strlen(title); i < width; ++i) {
+    putchar(' ');
+  }
+  puts(" |");
+
+  printf("| %s", sequence_line);
+  for (size_t i = sequence_len; i < width; ++i) {
+    putchar(' ');
+  }
+  puts(" |");
+
+  printf("| ");
+  for (size_t i = 0; i < width; ++i) {
+    putchar(' ');
+  }
+  puts(" |");
+
+  line_cursor = display_transcript;
+  while (line_cursor != NULL) {
+    const char *newline = strchr(line_cursor, '\n');
+    size_t line_len = newline == NULL ? strlen(line_cursor) : (size_t)(newline - line_cursor);
+
+    printf("| ");
+    if (line_len > 0) {
+      (void)fwrite(line_cursor, 1, line_len, stdout);
+    }
+    for (size_t i = line_len; i < width; ++i) {
+      putchar(' ');
+    }
+    puts(" |");
+
+    if (newline == NULL) {
+      break;
+    }
+    line_cursor = newline + 1;
+  }
+
+  putchar('+');
+  for (size_t i = 0; i < width + 2; ++i) {
+    putchar('-');
+  }
+  puts("+");
+  fflush(stdout);
+}
+
 /** @brief Reset the active utterance length while keeping allocated memory. */
 static void assistantd_supervisor_reset_utterance(assistantd_supervisor_t *supervisor) {
   if (supervisor == NULL) {
@@ -316,6 +414,13 @@ static assistantd_status_t assistantd_supervisor_process_stt_queue(
                  "stt complete: sequence_id=%" PRIu64 " transcript=%s",
                  artifact.sequence_id,
                  result.transcript);
+  assistantd_supervisor_print_boxed_transcript(artifact.sequence_id, result.transcript);
+  if (assistantd_supervisor_is_stt_only_mode(supervisor)) {
+    assistantd_log(ASSISTANTD_LOG_INFO,
+                   "stt-only mode: transcript emitted, continuing capture loop");
+    return ASSISTANTD_OK;
+  }
+
   assistantd_log(ASSISTANTD_LOG_INFO,
                  "supervisor pipeline boundary: transcript ready, awaiting LLM integration");
   return ASSISTANTD_ERR_UNIMPLEMENTED;
@@ -323,6 +428,10 @@ static assistantd_status_t assistantd_supervisor_process_stt_queue(
 
 static assistantd_status_t assistantd_supervisor_initialize_modules(
     assistantd_supervisor_t *supervisor) {
+  if (supervisor == NULL || supervisor->config == NULL) {
+    return ASSISTANTD_ERR_INVALID_ARGUMENT;
+  }
+
   assistantd_supervisor_reset_utterance(supervisor);
   assistantd_artifact_queue_init(&supervisor->artifact_queue);
 
@@ -336,14 +445,19 @@ static assistantd_status_t assistantd_supervisor_initialize_modules(
     return status;
   }
 
-  status = assistantd_llm_init(&supervisor->llm, supervisor->config);
-  if (status != ASSISTANTD_OK) {
-    return status;
-  }
+  if (assistantd_supervisor_is_stt_only_mode(supervisor)) {
+    assistantd_log(ASSISTANTD_LOG_INFO,
+                   "supervisor stt-only mode active: skipping llm/tts initialization");
+  } else {
+    status = assistantd_llm_init(&supervisor->llm, supervisor->config);
+    if (status != ASSISTANTD_OK) {
+      return status;
+    }
 
-  status = assistantd_tts_init(&supervisor->tts, supervisor->config);
-  if (status != ASSISTANTD_OK) {
-    return status;
+    status = assistantd_tts_init(&supervisor->tts, supervisor->config);
+    if (status != ASSISTANTD_OK) {
+      return status;
+    }
   }
 
   status = assistantd_ring_buffer_init(
@@ -370,8 +484,12 @@ static void assistantd_supervisor_shutdown_modules(assistantd_supervisor_t *supe
   supervisor->next_artifact_sequence_id = 0;
   (void)assistantd_vad_shutdown(&supervisor->vad);
   (void)assistantd_stt_shutdown(&supervisor->stt);
-  (void)assistantd_llm_shutdown(&supervisor->llm);
-  (void)assistantd_tts_shutdown(&supervisor->tts);
+  if (supervisor->llm.initialized || supervisor->llm.curl_handle != NULL) {
+    (void)assistantd_llm_shutdown(&supervisor->llm);
+  }
+  if (supervisor->tts.initialized) {
+    (void)assistantd_tts_shutdown(&supervisor->tts);
+  }
 }
 
 assistantd_status_t assistantd_supervisor_init(
@@ -455,7 +573,7 @@ assistantd_status_t assistantd_supervisor_run_once(assistantd_supervisor_t *supe
   }
 
   size_t queued_artifacts = assistantd_artifact_queue_size(&supervisor->artifact_queue);
-  assistantd_log(ASSISTANTD_LOG_INFO,
+  assistantd_log(ASSISTANTD_LOG_DEBUG,
                  "supervisor capture tick: buffered=%zu bytes queued_artifacts=%zu",
                  assistantd_ring_buffer_available(&supervisor->capture_ring),
                  queued_artifacts);
