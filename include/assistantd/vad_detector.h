@@ -19,6 +19,7 @@ typedef struct {
   int silence_ms;
   int accumulated_silence_ms;
   int speech_active;
+  void *backend;
 } assistantd_vad_detector_t;
 
 assistantd_status_t assistantd_vad_init(
@@ -30,6 +31,7 @@ assistantd_status_t assistantd_vad_process_frame(
     size_t sample_count,
     int frame_duration_ms,
     assistantd_vad_event_t *event);
+assistantd_status_t assistantd_vad_shutdown(assistantd_vad_detector_t *detector);
 void assistantd_vad_reset(assistantd_vad_detector_t *detector);
 
 #endif  // ASSISTANTD_VAD_DETECTOR_H

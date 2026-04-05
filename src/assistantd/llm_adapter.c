@@ -10,7 +10,7 @@
 
 #include <curl/curl.h>
 
-#include "assistantd/logger.h"
+#include "assistantd/utilities/logger.h"
 #include "cJSON.h"
 
 /**

@@ -15,13 +15,15 @@ This repo contains a local-only C daemon scaffold (`assistantd`) for orchestrati
 
 - Runtime implementation is intentionally incomplete for the full voice pipeline.
 - **LLM adapter (`llm_adapter`)**: concrete implementation is in place — libcurl HTTP to a local OpenAI-compatible server, cJSON request/response, system prompt file loading, 40s timeout, shutdown cancellation via progress callback. Supervisor still does not wire a full end-to-end interaction loop (Phase 4).
-- Other adapters (STT, TTS, capture, VAD orchestration) remain scaffold/TODO where noted in `HUMANS.md`.
+- **VAD detector (`vad_detector`)**: implemented with `libfvad` frame classification and local speech state transitions (`START/CONTINUE/END`) behind the existing interface.
+- Other adapters (STT, TTS, orchestration wiring) remain scaffold/TODO where noted in `HUMANS.md`.
 - Module files include Doxygen `@todo` playbook blocks that define implementation contracts; keep them accurate when you change behavior.
 
 ## Build Prerequisites (LLM path)
 
 - CMake >= 3.20, C17 compiler.
 - **libcurl** with development headers so CMake can `find_package(CURL)` (e.g. macOS: Xcode SDK; Raspberry Pi OS: `libcurl4-openssl-dev`).
+- **libfvad** is vendored under `src/third_party/libfvad` and built from source with `assistantd_core`.
 - Vendored **cJSON** is compiled as part of `assistantd_core` (`src/third_party/cJSON/`).
 
 ## Canonical Commands
@@ -74,7 +76,7 @@ curl -s http://127.0.0.1:8080/v1/models | head
 ## Test Expectations
 
 - Build and C tests must pass in CI.
-- Shape tests: `test_ring_buffer_shape`, `test_config_shape`, `test_supervisor_shape`, `test_llm_adapter_shape`.
+- Shape tests: `test_ring_buffer_shape`, `test_ring_buffer_spsc`, `test_config_shape`, `test_audio_capture_shape`, `test_vad_detector_shape`, `test_supervisor_shape`, `test_llm_adapter_shape`.
 - `test_llm_adapter_shape` covers init (prompt file, curl handle), generate error paths (e.g. connection refused), shutdown, and `assistantd_llm_set_shutdown_flag`. Not a substitute for integration tests against a live llama-server.
 
 ## CI Expectations
