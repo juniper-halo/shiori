@@ -5,7 +5,7 @@
 
 #include <fvad.h>
 
-#include "assistantd/logger.h"
+#include "assistantd/utilities/logger.h"
 
 #define ASSISTANTD_VAD_SAMPLE_RATE_HZ 16000
 

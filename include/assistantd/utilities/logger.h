@@ -1,5 +1,5 @@
-#ifndef ASSISTANTD_LOGGER_H
-#define ASSISTANTD_LOGGER_H
+#ifndef ASSISTANTD_UTILITIES_LOGGER_H
+#define ASSISTANTD_UTILITIES_LOGGER_H
 
 #include <stdarg.h>
 
@@ -14,4 +14,4 @@ void assistantd_log_set_level(assistantd_log_level_t level);
 void assistantd_log(assistantd_log_level_t level, const char *fmt, ...);
 void assistantd_vlog(assistantd_log_level_t level, const char *fmt, va_list args);
 
-#endif  // ASSISTANTD_LOGGER_H
+#endif  // ASSISTANTD_UTILITIES_LOGGER_H

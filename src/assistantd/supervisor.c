@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #include "dr_wav.h"
-#include "assistantd/logger.h"
+#include "assistantd/utilities/logger.h"
 #include "assistantd/playback.h"
 
 #define ASSISTANTD_SUPERVISOR_CAPTURE_CHUNK_BYTES 640

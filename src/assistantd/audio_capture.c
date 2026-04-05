@@ -14,7 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "assistantd/logger.h"
+#include "assistantd/utilities/logger.h"
 
 #define ASSISTANTD_ARECORD_PATH "/usr/bin/arecord"
 #define ASSISTANTD_CAPTURE_SAMPLE_RATE "16000"

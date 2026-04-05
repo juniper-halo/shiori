@@ -1,4 +1,4 @@
-#include "assistantd/logger.h"
+#include "assistantd/utilities/logger.h"
 
 #include <stdio.h>
 #include <time.h>

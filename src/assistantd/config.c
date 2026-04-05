@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "assistantd/logger.h"
+#include "assistantd/utilities/logger.h"
 
 /**
  * @todo Implementation Playbook

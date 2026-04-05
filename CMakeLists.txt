@@ -32,7 +32,7 @@ add_library(
   src/third_party/libfvad/src/vad/vad_gmm.c
   src/third_party/libfvad/src/vad/vad_sp.c
   src/assistantd/status.c
-  src/assistantd/logger.c
+  src/assistantd/utilities/logger.c
   src/assistantd/config.c
   src/assistantd/ring_buffer.c
   src/assistantd/utilities/artifact_queue.c
