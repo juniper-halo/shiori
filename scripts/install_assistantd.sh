@@ -29,6 +29,15 @@ SSH_CONTROL_PATH=""
 SSH_CONTROL_DIR=""
 SSH_MASTER_TARGET=""
 
+# Bluetooth setup options.
+SETUP_BLUETOOTH=false
+BT_MAC=""
+BT_STACK="bluealsa"
+SKIP_BT_PAIR=false
+UPDATE_BT_CONFIG=false
+BT_SCAN_SECS=10
+BT_CONNECT_ATTEMPTS=3
+
 log() {
   echo "[install_assistantd] $*"
 }
@@ -57,6 +66,15 @@ Options:
   --service-group <grp>  systemd Group= value (default: pi).
   --ssh-no-tty           Disable pseudo-terminal allocation for remote SSH run.
   --help                 Show help.
+
+Bluetooth Setup (requires --local-install or --ssh):
+  --setup-bluetooth      Install BT stack, pair device, and validate audio output.
+  --bt-mac <MAC>         Bluetooth device MAC address (required with --setup-bluetooth).
+                         Format: AA:BB:CC:DD:EE:FF
+  --bt-stack <stack>     BT audio stack: bluealsa (default, lightweight) or pipewire.
+  --skip-bt-pair         Skip pairing step; assume device already trusted, connect only.
+  --update-bt-config     Write discovered device string to installed env file as AUDIO_DEVICE.
+                         (After Phase 1 config split this becomes AUDIO_PLAYBACK_DEVICE.)
 EOF
 }
 
@@ -196,6 +214,187 @@ cleanup_exit() {
 
 trap cleanup_exit EXIT
 
+# ---------------------------------------------------------------------------
+# Bluetooth helpers
+# ---------------------------------------------------------------------------
+
+# Validate BT_MAC is a well-formed MAC address.
+validate_bt_mac() {
+  if [[ ! "${BT_MAC}" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
+    echo "Invalid Bluetooth MAC address (expected XX:XX:XX:XX:XX:XX): '${BT_MAC}'" >&2
+    exit 1
+  fi
+}
+
+bt_is_paired() {
+  bluetoothctl info "$1" 2>/dev/null | grep -q "Paired: yes"
+}
+
+bt_is_connected() {
+  bluetoothctl info "$1" 2>/dev/null | grep -q "Connected: yes"
+}
+
+# Scan briefly, then pair and trust the device.
+# The device must be in discoverable/pairable mode during the scan window.
+bt_pair_device() {
+  local mac="$1"
+  local scan_pid=""
+
+  log "Scanning for ${mac} (${BT_SCAN_SECS}s) — ensure device is in pairing mode"
+  bluetoothctl scan on >/dev/null 2>&1 &
+  scan_pid="$!"
+  sleep "${BT_SCAN_SECS}"
+  kill "${scan_pid}" 2>/dev/null || true
+  wait "${scan_pid}" 2>/dev/null || true
+  bluetoothctl scan off >/dev/null 2>&1 || true
+
+  log "Pairing with ${mac}"
+  # pair exits non-zero if already paired; treat that as success.
+  bluetoothctl pair "${mac}" || log "Pair step returned non-zero (device may already be paired)"
+  bluetoothctl trust "${mac}"
+}
+
+# Attempt connection up to BT_CONNECT_ATTEMPTS times with a 3-second back-off.
+bt_connect_with_retry() {
+  local mac="$1"
+  local i=1
+  local output=""
+
+  while [[ "${i}" -le "${BT_CONNECT_ATTEMPTS}" ]]; do
+    log "Connecting to ${mac} (attempt ${i}/${BT_CONNECT_ATTEMPTS})"
+    output="$(bluetoothctl connect "${mac}" 2>/dev/null || true)"
+    if echo "${output}" | grep -q "Connection successful"; then
+      log "Connected to ${mac}"
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 3
+  done
+
+  echo "Failed to connect to Bluetooth device ${mac} after ${BT_CONNECT_ATTEMPTS} attempts" >&2
+  return 1
+}
+
+# Emit the ALSA device string for arecord/aplay given a MAC and stack.
+bt_device_string() {
+  local mac="$1"
+  local stack="$2"
+  local device_str=""
+
+  if [[ "${stack}" == "bluealsa" ]]; then
+    device_str="bluealsa:DEV=${mac},PROFILE=a2dp"
+  elif [[ "${stack}" == "pipewire" ]]; then
+    # PipeWire exposes the BT sink via PulseAudio compat layer.
+    # Sink name pattern: bluez_output.<mac_with_underscores>.<index>
+    local normalized_mac=""
+    normalized_mac="$(echo "${mac}" | tr ':' '_' | tr '[:upper:]' '[:lower:]')"
+    if command -v pactl >/dev/null 2>&1; then
+      local discovered=""
+      discovered="$(pactl list sinks short 2>/dev/null | awk '{print $2}' \
+        | grep -i "${normalized_mac}" | head -1 || true)"
+      if [[ -n "${discovered}" ]]; then
+        device_str="pulse:${discovered}"
+      fi
+    fi
+    if [[ -z "${device_str}" ]]; then
+      # Predictable fallback — index 1 is typical for A2DP.
+      device_str="pulse:bluez_output.${normalized_mac}.1"
+      log "WARNING: could not detect PipeWire sink via pactl; using fallback: ${device_str}"
+    fi
+  fi
+
+  echo "${device_str}"
+}
+
+# Play 1 second of silence through the device to verify the stack is functional.
+bt_validate_audio() {
+  local device_str="$1"
+  log "Validating audio output on '${device_str}' (1s silence via aplay)"
+  if aplay -D "${device_str}" -f S16_LE -r 16000 -c 1 -d 1 /dev/zero >/dev/null 2>&1; then
+    log "Audio validation PASSED"
+    return 0
+  else
+    echo "Audio validation FAILED for device '${device_str}'" >&2
+    echo "  Check: is the BT device connected? Is the audio stack service running?" >&2
+    return 1
+  fi
+}
+
+# Full Bluetooth setup phase: packages → service → pair → connect → validate → (optionally) update env.
+setup_bluetooth_phase() {
+  if [[ -z "${BT_MAC}" ]]; then
+    echo "--setup-bluetooth requires --bt-mac <MAC>" >&2
+    exit 1
+  fi
+  validate_bt_mac
+
+  if [[ "${BT_STACK}" != "bluealsa" && "${BT_STACK}" != "pipewire" ]]; then
+    echo "Invalid --bt-stack value '${BT_STACK}'. Must be 'bluealsa' or 'pipewire'." >&2
+    exit 1
+  fi
+
+  log "--- Bluetooth setup: stack=${BT_STACK} mac=${BT_MAC} ---"
+
+  if [[ "${SKIP_PACKAGES}" == "false" ]]; then
+    require_cmd apt-get
+    if [[ "${BT_STACK}" == "bluealsa" ]]; then
+      log "Installing BlueALSA packages"
+      "${SUDO_CMD[@]}" apt-get install -y bluez bluez-tools bluealsa alsa-utils
+    else
+      log "Installing PipeWire Bluetooth packages"
+      "${SUDO_CMD[@]}" apt-get install -y bluez bluez-tools pipewire pipewire-pulse \
+        libspa-0.2-bluetooth wireplumber alsa-utils
+    fi
+  fi
+
+  require_cmd bluetoothctl
+  require_cmd aplay
+
+  log "Enabling bluetooth service"
+  "${SUDO_CMD[@]}" systemctl enable --now bluetooth
+
+  log "Powering on Bluetooth adapter"
+  bluetoothctl power on
+
+  if [[ "${BT_STACK}" == "bluealsa" ]]; then
+    log "Enabling bluealsa service"
+    "${SUDO_CMD[@]}" systemctl enable --now bluealsa
+  fi
+
+  if [[ "${SKIP_BT_PAIR}" == "false" ]]; then
+    if bt_is_paired "${BT_MAC}"; then
+      log "Device ${BT_MAC} already paired — skipping pair step"
+    else
+      bt_pair_device "${BT_MAC}"
+    fi
+  fi
+
+  bt_connect_with_retry "${BT_MAC}"
+
+  local device_str=""
+  device_str="$(bt_device_string "${BT_MAC}" "${BT_STACK}")"
+
+  bt_validate_audio "${device_str}"
+
+  if [[ "${UPDATE_BT_CONFIG}" == "true" ]]; then
+    local env_file="/etc/local-ai-assistant/assistantd.env"
+    if [[ ! -f "${env_file}" ]]; then
+      log "WARNING: ${env_file} not found; skipping config update"
+    elif "${SUDO_CMD[@]}" grep -q "^AUDIO_PLAYBACK_DEVICE=" "${env_file}"; then
+      log "Updating AUDIO_PLAYBACK_DEVICE in ${env_file}"
+      "${SUDO_CMD[@]}" sed -i "s|^AUDIO_PLAYBACK_DEVICE=.*|AUDIO_PLAYBACK_DEVICE=${device_str}|" "${env_file}"
+    else
+      log "Appending AUDIO_PLAYBACK_DEVICE to ${env_file}"
+      echo "AUDIO_PLAYBACK_DEVICE=${device_str}" | "${SUDO_CMD[@]}" tee -a "${env_file}" >/dev/null
+    fi
+    log "Env file updated: AUDIO_PLAYBACK_DEVICE=${device_str}"
+  fi
+
+  log "--- Bluetooth setup complete ---"
+  log "  Device string : ${device_str}"
+  log "  Next step     : set AUDIO_PLAYBACK_DEVICE=${device_str} in your env file."
+}
+
 # Parse installer arguments.
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -244,6 +443,26 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ssh-no-tty)
       SSH_TTY=false
+      shift
+      ;;
+    --setup-bluetooth)
+      SETUP_BLUETOOTH=true
+      shift
+      ;;
+    --bt-mac)
+      BT_MAC="${2:-}"
+      shift 2
+      ;;
+    --bt-stack)
+      BT_STACK="${2:-}"
+      shift 2
+      ;;
+    --skip-bt-pair)
+      SKIP_BT_PAIR=true
+      shift
+      ;;
+    --update-bt-config)
+      UPDATE_BT_CONFIG=true
       shift
       ;;
     --help|-h)
@@ -313,6 +532,21 @@ if [[ -n "${SSH_TARGET}" && "${LOCAL_INSTALL}" == "false" ]]; then
   fi
   if [[ "${NO_BUILD}" == "true" ]]; then
     remote_cmd+=(--no-build)
+  fi
+  if [[ "${SETUP_BLUETOOTH}" == "true" ]]; then
+    remote_cmd+=(--setup-bluetooth)
+  fi
+  if [[ -n "${BT_MAC}" ]]; then
+    remote_cmd+=(--bt-mac "${BT_MAC}")
+  fi
+  if [[ "${BT_STACK}" != "bluealsa" ]]; then
+    remote_cmd+=(--bt-stack "${BT_STACK}")
+  fi
+  if [[ "${SKIP_BT_PAIR}" == "true" ]]; then
+    remote_cmd+=(--skip-bt-pair)
+  fi
+  if [[ "${UPDATE_BT_CONFIG}" == "true" ]]; then
+    remote_cmd+=(--update-bt-config)
   fi
 
   # Run remote install with optional TTY so remote sudo can prompt.
@@ -406,6 +640,11 @@ rm -f "${tmp_unit}"
 
 log "Reloading systemd units"
 "${SUDO_CMD[@]}" systemctl daemon-reload
+
+# Run Bluetooth setup before the service starts so the env file is correct when it does.
+if [[ "${SETUP_BLUETOOTH}" == "true" ]]; then
+  setup_bluetooth_phase
+fi
 
 # Enable and start service by default, unless explicitly disabled.
 if [[ "${SKIP_ENABLE}" == "true" ]]; then
