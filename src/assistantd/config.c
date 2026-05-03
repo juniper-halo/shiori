@@ -64,7 +64,8 @@ assistantd_status_t assistantd_config_init_defaults(assistantd_config_t *config)
   memset(config, 0, sizeof(*config));
   copy_config_value(config->assistant_mode, sizeof(config->assistant_mode), "local");
   copy_config_value(config->runtime_dir, sizeof(config->runtime_dir), "/var/lib/local-ai-assistant");
-  copy_config_value(config->audio_device, sizeof(config->audio_device), "default");
+  copy_config_value(config->audio_capture_device, sizeof(config->audio_capture_device), "default");
+  copy_config_value(config->audio_playback_device, sizeof(config->audio_playback_device), "default");
   copy_config_value(config->whisper_bin, sizeof(config->whisper_bin), "/usr/local/bin/whisper-cli");
   copy_config_value(config->whisper_model_path, sizeof(config->whisper_model_path), "/opt/models/whisper.gguf");
   copy_config_value(config->llm_api_base_url, sizeof(config->llm_api_base_url), "http://127.0.0.1:8080/v1");
@@ -110,8 +111,10 @@ assistantd_status_t assistantd_config_load_file(assistantd_config_t *config, con
       copy_config_value(config->assistant_mode, sizeof(config->assistant_mode), value);
     } else if (strcmp(key, "RUNTIME_DIR") == 0) {
       copy_config_value(config->runtime_dir, sizeof(config->runtime_dir), value);
-    } else if (strcmp(key, "AUDIO_DEVICE") == 0) {
-      copy_config_value(config->audio_device, sizeof(config->audio_device), value);
+    } else if (strcmp(key, "AUDIO_CAPTURE_DEVICE") == 0) {
+      copy_config_value(config->audio_capture_device, sizeof(config->audio_capture_device), value);
+    } else if (strcmp(key, "AUDIO_PLAYBACK_DEVICE") == 0) {
+      copy_config_value(config->audio_playback_device, sizeof(config->audio_playback_device), value);
     } else if (strcmp(key, "WHISPER_BIN") == 0) {
       copy_config_value(config->whisper_bin, sizeof(config->whisper_bin), value);
     } else if (strcmp(key, "WHISPER_MODEL_PATH") == 0) {
@@ -149,7 +152,8 @@ assistantd_status_t assistantd_config_validate(const assistantd_config_t *config
     return ASSISTANTD_ERR_CONFIG;
   }
 
-  if (config->runtime_dir[0] == '\0' || config->whisper_bin[0] == '\0' ||
+  if (config->runtime_dir[0] == '\0' || config->audio_capture_device[0] == '\0' ||
+      config->audio_playback_device[0] == '\0' || config->whisper_bin[0] == '\0' ||
       config->whisper_model_path[0] == '\0' || config->llm_api_base_url[0] == '\0' ||
       config->llm_model[0] == '\0' || config->llm_system_prompt_path[0] == '\0' ||
       config->tts_bin[0] == '\0' || config->tts_voice_path[0] == '\0') {
@@ -174,7 +178,8 @@ void assistantd_config_dump(const assistantd_config_t *config, FILE *stream) {
 
   fprintf(stream, "ASSISTANT_MODE=%s\n", config->assistant_mode);
   fprintf(stream, "RUNTIME_DIR=%s\n", config->runtime_dir);
-  fprintf(stream, "AUDIO_DEVICE=%s\n", config->audio_device);
+  fprintf(stream, "AUDIO_CAPTURE_DEVICE=%s\n", config->audio_capture_device);
+  fprintf(stream, "AUDIO_PLAYBACK_DEVICE=%s\n", config->audio_playback_device);
   fprintf(stream, "WHISPER_BIN=%s\n", config->whisper_bin);
   fprintf(stream, "WHISPER_MODEL_PATH=%s\n", config->whisper_model_path);
   fprintf(stream, "LLM_API_BASE_URL=%s\n", config->llm_api_base_url);

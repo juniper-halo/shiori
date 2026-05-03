@@ -183,6 +183,11 @@ Validation is enforced in `src/assistantd/config.c`.
 `scripts/install_assistantd.sh` supports:
 1. local installation on Pi (`--local-install`),
 2. remote deployment over SSH from laptop (`--ssh user@host`).
+3. **Bluetooth setup** (`--setup-bluetooth --bt-mac <MAC> [--bt-stack bluealsa|pipewire]`):
+   - installs `bluez` + `bluealsa` or `pipewire-alsa` depending on `--bt-stack`,
+   - powers the Bluetooth adapter, pairs + trusts + connects the device,
+   - validates audio output with `aplay -D <device>` before writing the env file.
+   - Raspberry Pi OS Bookworm: use `--bt-stack pipewire`; Bullseye: use `--bt-stack bluealsa`.
 
 It should evolve to:
 1. install OS/runtime dependencies,
@@ -195,7 +200,10 @@ It should evolve to:
 ### Config (`config.c/.h`)
 - Has defaults, env parsing, and validation.
 - Enforces local-only mode.
-- Already useful for catching misconfiguration early.
+- **Extended:** `AUDIO_DEVICE` split into `AUDIO_CAPTURE_DEVICE` + `AUDIO_PLAYBACK_DEVICE`.
+  - Separate fields allow USB mic and Bluetooth speaker to be configured independently.
+  - Both validated non-empty; both printed in `config_dump()`.
+  - Example values: `hw:1,0` (USB mic) / `bluealsa:DEV=XX:XX:...,PROFILE=a2dp` or `pulse`.
 
 ### Ring buffer (`ring_buffer.c/.h`)
 - Functional baseline implementation exists.
@@ -203,8 +211,11 @@ It should evolve to:
 - TODOs define atomic/concurrency hardening work.
 
 ### Audio capture (`audio_capture.c/.h`)
-- Interface exists.
-- Process management behavior is TODO.
+- **Implemented:** `fork`/`execvp("arecord")` with pipe; PCM readable from `capture->stdout_fd`.
+  - Args: `-D <audio_capture_device> -f S16_LE -r 16000 -c 1 -t raw`
+  - Stop: SIGTERM → 2 s poll → SIGKILL; always reaps child to prevent zombies.
+  - Read: detects EOF (child exit), EINTR/EAGAIN (retry), and hard I/O errors.
+- **Not done:** ring buffer wiring — belongs in `assistantd_supervisor_run_once` (Phase 4).
 
 ### VAD (`vad_detector.c/.h`)
 - Interface/state placeholders exist.
@@ -224,8 +235,11 @@ It should evolve to:
 - Piper integration is TODO.
 
 ### Playback (`playback.c/.h`)
-- Interface exists.
-- Playback subprocess execution and timeout policy are TODO.
+- **Implemented:** `fork`/`execvp("aplay")` blocking call with 30 s timeout.
+  - Args: `-D <audio_playback_device> <wav_path>`
+  - Timeout: SIGTERM escalation, child reaped unconditionally.
+  - Stateless: retry policy is the supervisor's concern (Phase 4).
+  - Pi smoke test: `aplay -D pulse` exits 0 against PipeWire null sink ✓
 
 ### Supervisor (`supervisor.c/.h`)
 - Lifecycle state machine exists.

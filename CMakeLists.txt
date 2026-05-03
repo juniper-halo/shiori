@@ -55,4 +55,12 @@ if(BUILD_TESTING)
   add_executable(test_llm_adapter_shape tests/c/test_llm_adapter_shape.c)
   target_link_libraries(test_llm_adapter_shape PRIVATE assistantd_core)
   add_test(NAME llm_adapter_shape COMMAND test_llm_adapter_shape)
+
+  add_executable(test_audio_capture_shape tests/c/test_audio_capture_shape.c)
+  target_link_libraries(test_audio_capture_shape PRIVATE assistantd_core)
+  add_test(NAME audio_capture_shape COMMAND test_audio_capture_shape)
+
+  add_executable(test_playback_shape tests/c/test_playback_shape.c)
+  target_link_libraries(test_playback_shape PRIVATE assistantd_core)
+  add_test(NAME playback_shape COMMAND test_playback_shape)
 endif()
