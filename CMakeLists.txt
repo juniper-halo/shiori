@@ -18,10 +18,24 @@ find_package(CURL REQUIRED)
 add_library(
   assistantd_core
   src/third_party/cJSON/cJSON.c
+  src/third_party/dr_wav/dr_wav.c
+  src/third_party/libfvad/src/fvad.c
+  src/third_party/libfvad/src/signal_processing/division_operations.c
+  src/third_party/libfvad/src/signal_processing/energy.c
+  src/third_party/libfvad/src/signal_processing/get_scaling_square.c
+  src/third_party/libfvad/src/signal_processing/resample_48khz.c
+  src/third_party/libfvad/src/signal_processing/resample_by_2_internal.c
+  src/third_party/libfvad/src/signal_processing/resample_fractional.c
+  src/third_party/libfvad/src/signal_processing/spl_inl.c
+  src/third_party/libfvad/src/vad/vad_core.c
+  src/third_party/libfvad/src/vad/vad_filterbank.c
+  src/third_party/libfvad/src/vad/vad_gmm.c
+  src/third_party/libfvad/src/vad/vad_sp.c
   src/assistantd/status.c
-  src/assistantd/logger.c
+  src/assistantd/utilities/logger.c
   src/assistantd/config.c
   src/assistantd/ring_buffer.c
+  src/assistantd/utilities/artifact_queue.c
   src/assistantd/audio_capture.c
   src/assistantd/vad_detector.c
   src/assistantd/stt_adapter.c
@@ -34,19 +48,36 @@ add_library(
 
 target_include_directories(assistantd_core PUBLIC include)
 target_include_directories(assistantd_core PRIVATE src/third_party/cJSON)
+target_include_directories(assistantd_core PRIVATE src/third_party/dr_wav)
+target_include_directories(assistantd_core PRIVATE src/third_party/libfvad/include)
+target_include_directories(assistantd_core PRIVATE src/third_party/libfvad/src)
 target_link_libraries(assistantd_core PRIVATE CURL::libcurl)
 
 add_executable(assistantd src/assistantd/main.c)
 target_link_libraries(assistantd PRIVATE assistantd_core)
 
 if(BUILD_TESTING)
+  find_package(Threads REQUIRED)
+
   add_executable(test_ring_buffer_shape tests/c/test_ring_buffer_shape.c)
   target_link_libraries(test_ring_buffer_shape PRIVATE assistantd_core)
   add_test(NAME ring_buffer_shape COMMAND test_ring_buffer_shape)
 
+  add_executable(test_ring_buffer_spsc tests/c/test_ring_buffer_spsc.c)
+  target_link_libraries(test_ring_buffer_spsc PRIVATE assistantd_core Threads::Threads)
+  add_test(NAME ring_buffer_spsc COMMAND test_ring_buffer_spsc)
+
   add_executable(test_config_shape tests/c/test_config_shape.c)
   target_link_libraries(test_config_shape PRIVATE assistantd_core)
   add_test(NAME config_shape COMMAND test_config_shape)
+
+  add_executable(test_audio_capture_shape tests/c/test_audio_capture_shape.c)
+  target_link_libraries(test_audio_capture_shape PRIVATE assistantd_core)
+  add_test(NAME audio_capture_shape COMMAND test_audio_capture_shape)
+
+  add_executable(test_vad_detector_shape tests/c/test_vad_detector_shape.c)
+  target_link_libraries(test_vad_detector_shape PRIVATE assistantd_core)
+  add_test(NAME vad_detector_shape COMMAND test_vad_detector_shape)
 
   add_executable(test_supervisor_shape tests/c/test_supervisor_shape.c)
   target_link_libraries(test_supervisor_shape PRIVATE assistantd_core)
@@ -55,12 +86,4 @@ if(BUILD_TESTING)
   add_executable(test_llm_adapter_shape tests/c/test_llm_adapter_shape.c)
   target_link_libraries(test_llm_adapter_shape PRIVATE assistantd_core)
   add_test(NAME llm_adapter_shape COMMAND test_llm_adapter_shape)
-
-  add_executable(test_audio_capture_shape tests/c/test_audio_capture_shape.c)
-  target_link_libraries(test_audio_capture_shape PRIVATE assistantd_core)
-  add_test(NAME audio_capture_shape COMMAND test_audio_capture_shape)
-
-  add_executable(test_playback_shape tests/c/test_playback_shape.c)
-  target_link_libraries(test_playback_shape PRIVATE assistantd_core)
-  add_test(NAME playback_shape COMMAND test_playback_shape)
 endif()

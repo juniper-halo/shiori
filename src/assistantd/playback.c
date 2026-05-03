@@ -1,13 +1,6 @@
 #include "assistantd/playback.h"
 
-#include <errno.h>
-#include <signal.h>
-#include <string.h>
-#include <time.h>
-#include <unistd.h>
-#include <sys/wait.h>
-
-#include "assistantd/logger.h"
+#include "assistantd/utilities/logger.h"
 
 /**
  * @todo Implementation Playbook — implemented.

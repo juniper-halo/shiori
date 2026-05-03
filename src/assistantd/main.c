@@ -4,7 +4,7 @@
 #include <unistd.h>
 
 #include "assistantd/config.h"
-#include "assistantd/logger.h"
+#include "assistantd/utilities/logger.h"
 #include "assistantd/shutdown.h"
 #include "assistantd/status.h"
 #include "assistantd/supervisor.h"

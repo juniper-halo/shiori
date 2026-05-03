@@ -1,17 +1,30 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "assistantd/audio_capture.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include <sys/wait.h>
 
-#include "assistantd/logger.h"
+#include "assistantd/utilities/logger.h"
+
+#define ASSISTANTD_ARECORD_PATH "/usr/bin/arecord"
+#define ASSISTANTD_CAPTURE_SAMPLE_RATE "16000"
+#define ASSISTANTD_CAPTURE_CHANNELS "1"
+#define ASSISTANTD_CAPTURE_TERM_WAIT_MS 1000
+#define ASSISTANTD_CAPTURE_TERM_POLL_MS 20
 
 /**
- * @todo Implementation Playbook — Phase 2 implemented; Phase 4 wiring remains.
- * @brief Managed arecord child process producing 16-bit mono PCM at 16 kHz.
+ * @todo Implementation Playbook
+ * @brief Managed capture process around `arecord` streaming raw PCM frames.
  * @ownership Audio ingestion and process supervision.
  * @inputs
  *   - config->audio_capture_device: ALSA device string (e.g. "hw:1,0", "default").
@@ -24,24 +37,16 @@
  *   - One reader thread calls audio_capture_read(); lifecycle owned by supervisor thread.
  *   - stdout_fd is read-only after start() returns; no per-read locking needed.
  * @errors
- *   - start() fails fast if pipe() or fork() fails; exec failure is detected by the
- *     caller on the first read() (EOF when arecord is absent or the device is invalid).
- *   - read() distinguishes EOF (ASSISTANTD_ERR_CHILD_PROCESS), EINTR/EAGAIN (return OK
- *     with bytes_read=0 for caller retry), and hard I/O errors (ASSISTANTD_ERR_IO).
- *   - stop() sends SIGTERM, polls up to 2 s, escalates to SIGKILL, then reaps the child
- *     unconditionally to prevent zombies.
+ *   - Detect early child exit, broken pipe, and short reads.
+ *   - Fail fast on spawn/read failures and report status through `assistantd_status_t`.
  * @child_process_contracts
- *   - arecord args: -D <device> -f S16_LE -r 16000 -c 1 -t raw
- *   - stdout is the raw PCM stream; stderr is inherited for journald visibility.
+ *   - Child must emit 16-bit mono PCM at agreed sample rate.
+ *   - Stop path sends SIGTERM then SIGKILL timeout fallback.
+ * @acceptance
+ *   - Stream starts/stops cleanly with no zombie processes.
+ *   - Supervisor can recover from child crash deterministically.
  * @remaining
- *   - Ring buffer wiring belongs in assistantd_supervisor_run_once (Phase 4).
- */
-
-// SECTION: helpers
-
-/**
- * Poll for child exit in 50 ms increments up to timeout_ms.
- * Returns ASSISTANTD_OK once the child is reaped, ASSISTANTD_ERR_CHILD_PROCESS on timeout.
+ *   - Configurable capture format/rate and richer diagnostics can be added later.
  */
 static assistantd_status_t wait_for_child(pid_t pid, int timeout_ms) {
   int status;
@@ -58,51 +63,144 @@ static assistantd_status_t wait_for_child(pid_t pid, int timeout_ms) {
   return ASSISTANTD_ERR_CHILD_PROCESS;
 }
 
-// SECTION: implementation
-
-/**
- * Fork arecord with a pipe on stdout. On return, capture->stdout_fd carries the PCM
- * read-end. Exec failure is silent here; callers detect it via the first read() EOF.
- */
-assistantd_status_t assistantd_audio_capture_start(
-    assistantd_audio_capture_t *capture,
-    const assistantd_config_t *config) {
-  if (capture == NULL || config == NULL) return ASSISTANTD_ERR_INVALID_ARGUMENT;
-  if (capture->active) return ASSISTANTD_ERR_INVALID_ARGUMENT;
-
-  int pipefd[2];
-  if (pipe(pipefd) < 0) {
-    assistantd_log(ASSISTANTD_LOG_ERROR, "audio_capture: pipe() failed: %s", strerror(errno));
-    return ASSISTANTD_ERR_IO;
+static void assistantd_capture_reset(assistantd_audio_capture_t *capture) {
+  if (capture == NULL) {
+    return;
   }
 
-  const char *args[] = {
-    "arecord", "-D", config->audio_capture_device,
-    "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", NULL
-  };
+  capture->active = false;
+  capture->child_pid = -1;
+  capture->stdout_fd = -1;
+}
 
-  pid_t pid = fork();
-  if (pid < 0) {
-    close(pipefd[0]);
-    close(pipefd[1]);
-    assistantd_log(ASSISTANTD_LOG_ERROR, "audio_capture: fork() failed: %s", strerror(errno));
+static void assistantd_capture_close_fd(assistantd_audio_capture_t *capture) {
+  if (capture == NULL || capture->stdout_fd < 0) {
+    return;
+  }
+
+  (void)close(capture->stdout_fd);
+  capture->stdout_fd = -1;
+}
+
+static bool assistantd_capture_wait_for_exit(pid_t pid, int timeout_ms) {
+  if (pid <= 0) {
+    return true;
+  }
+
+  int waited_ms = 0;
+  while (waited_ms < timeout_ms) {
+    int status = 0;
+    pid_t waited = waitpid(pid, &status, WNOHANG);
+    if (waited == pid) {
+      return true;
+    }
+    if (waited == -1 && errno == ECHILD) {
+      return true;
+    }
+    if (waited == -1) {
+      return false;
+    }
+
+    struct timespec delay = {
+        .tv_sec = 0,
+        .tv_nsec = ASSISTANTD_CAPTURE_TERM_POLL_MS * 1000 * 1000,
+    };
+    (void)nanosleep(&delay, NULL);
+    waited_ms += ASSISTANTD_CAPTURE_TERM_POLL_MS;
+  }
+
+  return false;
+}
+
+static assistantd_status_t assistantd_capture_reap_child(assistantd_audio_capture_t *capture) {
+  if (capture == NULL || capture->child_pid <= 0) {
+    return ASSISTANTD_OK;
+  }
+
+  int status = 0;
+  pid_t waited = waitpid(capture->child_pid, &status, WNOHANG);
+  if (waited == 0) {
+    return ASSISTANTD_OK;
+  }
+  if (waited == -1 && errno != ECHILD) {
     return ASSISTANTD_ERR_CHILD_PROCESS;
   }
 
-  if (pid == 0) {
-    close(pipefd[0]);
-    if (dup2(pipefd[1], STDOUT_FILENO) < 0) _exit(1);
-    close(pipefd[1]);
-    execvp("arecord", (char *const *)args);
-    _exit(1);
+  capture->child_pid = -1;
+  capture->active = false;
+  assistantd_capture_close_fd(capture);
+  return ASSISTANTD_ERR_CHILD_PROCESS;
+}
+
+assistantd_status_t assistantd_audio_capture_start(
+    assistantd_audio_capture_t *capture,
+    const assistantd_config_t *config) {
+  if (capture == NULL || config == NULL) {
+    return ASSISTANTD_ERR_INVALID_ARGUMENT;
+  }
+  if (config->audio_device[0] == '\0') {
+    return ASSISTANTD_ERR_CONFIG;
+  }
+  if (capture->active) {
+    return ASSISTANTD_OK;
   }
 
-  close(pipefd[1]);
-  capture->stdout_fd = pipefd[0];
-  capture->child_pid = pid;
+  assistantd_capture_reset(capture);
+
+  if (access(ASSISTANTD_ARECORD_PATH, X_OK) != 0) {
+    assistantd_log(ASSISTANTD_LOG_WARN,
+                   "audio capture unavailable: `%s` not found; keeping scaffold boundary",
+                   ASSISTANTD_ARECORD_PATH);
+    return ASSISTANTD_ERR_UNIMPLEMENTED;
+  }
+
+  int pipe_fds[2] = {-1, -1};
+  if (pipe(pipe_fds) != 0) {
+    return ASSISTANTD_ERR_IO;
+  }
+
+  pid_t child_pid = fork();
+  if (child_pid < 0) {
+    (void)close(pipe_fds[0]);
+    (void)close(pipe_fds[1]);
+    return ASSISTANTD_ERR_CHILD_PROCESS;
+  }
+
+  if (child_pid == 0) {
+    (void)close(pipe_fds[0]);
+    if (dup2(pipe_fds[1], STDOUT_FILENO) < 0) {
+      _exit(127);
+    }
+    (void)close(pipe_fds[1]);
+
+    execl(ASSISTANTD_ARECORD_PATH,
+          "arecord",
+          "-D",
+          config->audio_device,
+          "-f",
+          "S16_LE",
+          "-c",
+          ASSISTANTD_CAPTURE_CHANNELS,
+          "-r",
+          ASSISTANTD_CAPTURE_SAMPLE_RATE,
+          "-t",
+          "raw",
+          (char *)NULL);
+    _exit(127);
+  }
+
+  (void)close(pipe_fds[1]);
+  int flags = fcntl(pipe_fds[0], F_GETFL, 0);
+  if (flags < 0 || fcntl(pipe_fds[0], F_SETFL, flags | O_NONBLOCK) < 0) {
+    (void)kill(child_pid, SIGTERM);
+    (void)waitpid(child_pid, NULL, 0);
+    (void)close(pipe_fds[0]);
+    return ASSISTANTD_ERR_IO;
+  }
+
+  capture->child_pid = child_pid;
+  capture->stdout_fd = pipe_fds[0];
   capture->active = true;
-  assistantd_log(ASSISTANTD_LOG_INFO, "audio_capture: arecord pid=%d device=%s",
-                 pid, config->audio_capture_device);
   return ASSISTANTD_OK;
 }
 
@@ -116,23 +214,38 @@ assistantd_status_t assistantd_audio_capture_read(
     uint8_t *buffer,
     size_t capacity,
     size_t *bytes_read) {
-  if (capture == NULL || buffer == NULL || capacity == 0 || bytes_read == NULL)
+  if (bytes_read != NULL) {
+    *bytes_read = 0;
+  }
+  if (capture == NULL || buffer == NULL || capacity == 0) {
     return ASSISTANTD_ERR_INVALID_ARGUMENT;
-  if (!capture->active) return ASSISTANTD_ERR_IO;
-
-  *bytes_read = 0;
-  ssize_t n = read(capture->stdout_fd, buffer, capacity);
-  if (n == 0) {
-    assistantd_log(ASSISTANTD_LOG_WARN, "audio_capture: EOF on pipe; child exited");
+  }
+  if (!capture->active || capture->stdout_fd < 0 || capture->child_pid <= 0) {
     return ASSISTANTD_ERR_CHILD_PROCESS;
   }
-  if (n < 0) {
-    if (errno == EINTR || errno == EAGAIN) return ASSISTANTD_OK;
-    assistantd_log(ASSISTANTD_LOG_ERROR, "audio_capture: read() failed: %s", strerror(errno));
-    return ASSISTANTD_ERR_IO;
+
+  ssize_t read_count = read(capture->stdout_fd, buffer, capacity);
+  if (read_count > 0) {
+    if (bytes_read != NULL) {
+      *bytes_read = (size_t)read_count;
+    }
+    return ASSISTANTD_OK;
   }
-  *bytes_read = (size_t)n;
-  return ASSISTANTD_OK;
+
+  if (read_count == 0) {
+    (void)assistantd_capture_reap_child(capture);
+    return ASSISTANTD_ERR_CHILD_PROCESS;
+  }
+
+  if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+    assistantd_status_t child_status = assistantd_capture_reap_child(capture);
+    if (child_status != ASSISTANTD_OK) {
+      return child_status;
+    }
+    return ASSISTANTD_OK;
+  }
+
+  return ASSISTANTD_ERR_IO;
 }
 
 /**
@@ -149,17 +262,25 @@ assistantd_status_t assistantd_audio_capture_stop(assistantd_audio_capture_t *ca
                    capture->child_pid, strerror(errno));
   }
 
-  if (wait_for_child(capture->child_pid, 2000) != ASSISTANTD_OK) {
-    assistantd_log(ASSISTANTD_LOG_WARN, "audio_capture: SIGTERM timeout; escalating to SIGKILL pid=%d",
-                   capture->child_pid);
-    kill(capture->child_pid, SIGKILL);
-    int status;
-    waitpid(capture->child_pid, &status, 0);
+  assistantd_status_t status = ASSISTANTD_OK;
+  pid_t child_pid = capture->child_pid;
+  assistantd_capture_close_fd(capture);
+
+  if (child_pid > 0) {
+    if (kill(child_pid, SIGTERM) != 0 && errno != ESRCH) {
+      status = ASSISTANTD_ERR_CHILD_PROCESS;
+    }
+
+    bool exited = assistantd_capture_wait_for_exit(child_pid, ASSISTANTD_CAPTURE_TERM_WAIT_MS);
+    if (!exited) {
+      if (kill(child_pid, SIGKILL) != 0 && errno != ESRCH) {
+        status = ASSISTANTD_ERR_CHILD_PROCESS;
+      }
+      (void)waitpid(child_pid, NULL, 0);
+    }
   }
 
-  close(capture->stdout_fd);
-  capture->stdout_fd = -1;
-  capture->child_pid = -1;
   capture->active = false;
-  return ASSISTANTD_OK;
+  capture->child_pid = -1;
+  return status;
 }
