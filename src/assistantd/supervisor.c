@@ -5,12 +5,35 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <inttypes.h>
+#include <stdint.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <unistd.h>
 
 #include "dr_wav.h"
 #include "assistantd/utilities/logger.h"
+#include "dr_wav.h"
+#include "assistantd/utilities/logger.h"
 #include "assistantd/playback.h"
+
+#define ASSISTANTD_SUPERVISOR_CAPTURE_CHUNK_BYTES 640
+#define ASSISTANTD_SUPERVISOR_RING_CAPACITY_BYTES (16000 * 2 * 2)
+#define ASSISTANTD_SUPERVISOR_PCM_SAMPLE_RATE_HZ 16000
+#define ASSISTANTD_SUPERVISOR_PCM_CHANNELS 1
+#define ASSISTANTD_SUPERVISOR_PCM_BYTES_PER_SAMPLE 2
+#define ASSISTANTD_SUPERVISOR_VAD_FRAME_DURATION_MS 20
+#define ASSISTANTD_SUPERVISOR_VAD_FRAME_SAMPLES \
+  ((ASSISTANTD_SUPERVISOR_PCM_SAMPLE_RATE_HZ / 1000) * ASSISTANTD_SUPERVISOR_VAD_FRAME_DURATION_MS)
+#define ASSISTANTD_SUPERVISOR_VAD_FRAME_BYTES \
+  (ASSISTANTD_SUPERVISOR_VAD_FRAME_SAMPLES * ASSISTANTD_SUPERVISOR_PCM_BYTES_PER_SAMPLE)
+#define ASSISTANTD_SUPERVISOR_INITIAL_UTTERANCE_CAPACITY (ASSISTANTD_SUPERVISOR_VAD_FRAME_BYTES * 16)
+
+_Static_assert(ASSISTANTD_SUPERVISOR_CAPTURE_CHUNK_BYTES == ASSISTANTD_SUPERVISOR_VAD_FRAME_BYTES,
+               "capture chunk bytes must match VAD frame bytes");
 
 #define ASSISTANTD_SUPERVISOR_CAPTURE_CHUNK_BYTES 640
 #define ASSISTANTD_SUPERVISOR_RING_CAPACITY_BYTES (16000 * 2 * 2)
@@ -47,6 +70,8 @@ _Static_assert(ASSISTANTD_SUPERVISOR_CAPTURE_CHUNK_BYTES == ASSISTANTD_SUPERVISO
  * @child_process_contracts
  *   - Capture/STT/TTS processes have explicit startup, timeout, and shutdown contracts.
  * @acceptance
+ *   - Capture is now supervisor-owned: run loop starts/stops capture and routes bytes to ring buffer.
+ *   - Completed VAD utterances are persisted to WAV files and queued in sequence order for STT.
  *   - Capture is now supervisor-owned: run loop starts/stops capture and routes bytes to ring buffer.
  *   - Completed VAD utterances are persisted to WAV files and queued in sequence order for STT.
  *   - Clean startup/shutdown without orphan child processes.
@@ -397,7 +422,9 @@ assistantd_status_t assistantd_supervisor_start(assistantd_supervisor_t *supervi
   }
 
   assistantd_status_t status = assistantd_supervisor_initialize_modules(supervisor);
+  assistantd_status_t status = assistantd_supervisor_initialize_modules(supervisor);
   if (status != ASSISTANTD_OK) {
+    assistantd_supervisor_shutdown_modules(supervisor);
     assistantd_supervisor_shutdown_modules(supervisor);
     return status;
   }
@@ -468,6 +495,7 @@ assistantd_status_t assistantd_supervisor_stop(assistantd_supervisor_t *supervis
   }
 
   supervisor->state = ASSISTANTD_SUPERVISOR_STOPPING;
+  assistantd_supervisor_shutdown_modules(supervisor);
   assistantd_supervisor_shutdown_modules(supervisor);
   supervisor->state = ASSISTANTD_SUPERVISOR_STOPPED;
   return ASSISTANTD_OK;
