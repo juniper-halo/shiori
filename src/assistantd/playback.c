@@ -2,6 +2,13 @@
 
 #include "assistantd/utilities/logger.h"
 
+#include <errno.h>
+#include <signal.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 /**
  * @todo Implementation Playbook — implemented.
  * @brief Stateless aplay subprocess that plays a WAV file to the configured output device.
