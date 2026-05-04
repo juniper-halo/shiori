@@ -551,11 +551,11 @@ assistantd_status_t assistantd_supervisor_run_once(assistantd_supervisor_t *supe
 
   size_t queued_artifacts = assistantd_artifact_queue_size(&supervisor->artifact_queue);
   size_t queued_llm_responses = assistantd_llm_response_queue_size(&supervisor->llm_response_queue);
-  assistantd_log(ASSISTANTD_LOG_INFO,
-                 "supervisor capture tick: buffered=%zu bytes queued_artifacts=%zu queued_llm_responses=%zu",
-                 assistantd_ring_buffer_available(&supervisor->capture_ring),
-                 queued_artifacts,
-                 queued_llm_responses);
+  // assistantd_log(ASSISTANTD_LOG_INFO,
+  //                "supervisor capture tick: buffered=%zu bytes queued_artifacts=%zu queued_llm_responses=%zu",
+  //                assistantd_ring_buffer_available(&supervisor->capture_ring),
+  //                queued_artifacts,
+  //                queued_llm_responses);
   return ASSISTANTD_OK;
 }
 
