@@ -25,3 +25,8 @@ compile_commands.json
 models/
 
 .env
+
+# Local planning / notes docs
+AGENTS.md
+HUMANS.md
+docs/
