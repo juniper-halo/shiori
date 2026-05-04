@@ -66,7 +66,9 @@ assistantd_status_t assistantd_config_init_defaults(assistantd_config_t *config)
   copy_config_value(config->runtime_dir, sizeof(config->runtime_dir), "/var/lib/local-ai-assistant");
   copy_config_value(config->audio_device, sizeof(config->audio_device), "default");
   copy_config_value(config->whisper_bin, sizeof(config->whisper_bin), "/usr/local/bin/whisper-cli");
-  copy_config_value(config->whisper_model_path, sizeof(config->whisper_model_path), "/opt/models/whisper.gguf");
+  copy_config_value(config->whisper_model_path,
+                    sizeof(config->whisper_model_path),
+                    "/usr/local/share/assistantd/models/ggml-base.en-q5_1.bin");
   copy_config_value(config->llm_api_base_url, sizeof(config->llm_api_base_url), "http://127.0.0.1:8080/v1");
   copy_config_value(config->llm_model, sizeof(config->llm_model), "SmolLM2-1.7B-Instruct-Q4_K_M");
   copy_config_value(config->llm_system_prompt_path, sizeof(config->llm_system_prompt_path), "/etc/local-ai-assistant/system_prompt.txt");

@@ -6,6 +6,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${ROOT_DIR}/build"
 UNIT_SRC="${ROOT_DIR}/systemd/assistantd.service"
 CONFIG_SRC="${ROOT_DIR}/config/assistantd.env.example"
+WHISPER_CPP_VERSION="v1.8.4"
+WHISPER_CPP_ARCHIVE_URL="https://github.com/ggml-org/whisper.cpp/archive/refs/tags/${WHISPER_CPP_VERSION}.tar.gz"
+WHISPER_MODEL_NAME="ggml-base.en-q5_1.bin"
+WHISPER_MODEL_DOWNLOAD_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${WHISPER_MODEL_NAME}"
+WHISPER_MODEL_INSTALL_DIR="/usr/local/share/assistantd/models"
+WHISPER_MODEL_INSTALL_PATH="${WHISPER_MODEL_INSTALL_DIR}/${WHISPER_MODEL_NAME}"
 
 # Default options; may be overridden by CLI flags.
 SSH_TARGET=""
@@ -59,6 +65,87 @@ require_cmd() {
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+cpu_jobs() {
+  getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2
+}
+
+# Install whisper-cli to /usr/local/bin when not already present.
+install_whisper_cli() {
+  if [[ -x /usr/local/bin/whisper-cli ]]; then
+    log "whisper-cli already installed at /usr/local/bin/whisper-cli"
+    return
+  fi
+
+  require_cmd curl
+  require_cmd tar
+  require_cmd cmake
+  require_cmd mktemp
+
+  local work_dir=""
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/assistantd-whisper-XXXXXXXX")"
+  local archive_path="${work_dir}/whisper.cpp.tar.gz"
+  local src_dir="${work_dir}/whisper.cpp-${WHISPER_CPP_VERSION#v}"
+  local build_dir="${src_dir}/build"
+
+  log "Installing whisper-cli from whisper.cpp ${WHISPER_CPP_VERSION}"
+  curl -fsSL "${WHISPER_CPP_ARCHIVE_URL}" -o "${archive_path}"
+  tar -xzf "${archive_path}" -C "${work_dir}"
+
+  if [[ ! -d "${src_dir}" ]]; then
+    src_dir="$(find "${work_dir}" -maxdepth 1 -type d -name "whisper.cpp-*" | head -n 1)"
+    build_dir="${src_dir}/build"
+  fi
+  if [[ -z "${src_dir}" || ! -d "${src_dir}" ]]; then
+    echo "Failed to locate whisper.cpp source tree in ${work_dir}" >&2
+    exit 1
+  fi
+
+  cmake \
+    -S "${src_dir}" \
+    -B "${build_dir}" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DWHISPER_BUILD_TESTS=OFF \
+    -DWHISPER_BUILD_SERVER=OFF
+  cmake --build "${build_dir}" --target whisper-cli -j "$(cpu_jobs)"
+
+  if [[ ! -x "${build_dir}/bin/whisper-cli" ]]; then
+    echo "whisper-cli build output missing at ${build_dir}/bin/whisper-cli" >&2
+    exit 1
+  fi
+
+  "${SUDO_CMD[@]}" install -m 755 "${build_dir}/bin/whisper-cli" /usr/local/bin/whisper-cli
+  rm -rf "${work_dir}"
+}
+
+# Ensure the quantized base Whisper model is available on the host.
+install_whisper_model() {
+  local repo_model_path="${ROOT_DIR}/src/third_party/whisper_models/${WHISPER_MODEL_NAME}"
+  local tmp_model_path=""
+
+  "${SUDO_CMD[@]}" install -d -m 755 "${WHISPER_MODEL_INSTALL_DIR}"
+
+  if [[ -r "${WHISPER_MODEL_INSTALL_PATH}" ]]; then
+    log "Whisper model already present at ${WHISPER_MODEL_INSTALL_PATH}"
+    return
+  fi
+
+  if [[ -r "${repo_model_path}" ]]; then
+    log "Installing whisper model from repository copy: ${repo_model_path}"
+    "${SUDO_CMD[@]}" install -m 644 "${repo_model_path}" "${WHISPER_MODEL_INSTALL_PATH}"
+    return
+  fi
+
+  require_cmd curl
+  require_cmd mktemp
+
+  tmp_model_path="$(mktemp "${TMPDIR:-/tmp}/assistantd-whisper-model-XXXXXXXX.bin")"
+  log "Downloading whisper model: ${WHISPER_MODEL_NAME}"
+  curl -fsSL "${WHISPER_MODEL_DOWNLOAD_URL}" -o "${tmp_model_path}"
+  "${SUDO_CMD[@]}" install -m 644 "${tmp_model_path}" "${WHISPER_MODEL_INSTALL_PATH}"
+  rm -f "${tmp_model_path}"
 }
 
 # Authenticate once and keep credentials warm during install.
@@ -268,8 +355,16 @@ if [[ "${SKIP_PACKAGES}" == "false" ]]; then
   "${SUDO_CMD[@]}" apt-get install -y \
     build-essential \
     cmake \
+    curl \
+    ca-certificates \
+    alsa-utils \
     libcurl4-openssl-dev
 fi
+
+log "Ensuring whisper-cli runtime dependency"
+install_whisper_cli
+log "Ensuring whisper model artifact"
+install_whisper_model
 
 # Build the daemon unless caller provided --no-build.
 if [[ "${NO_BUILD}" == "false" ]]; then

@@ -52,7 +52,7 @@ _Static_assert(ASSISTANTD_SUPERVISOR_CAPTURE_CHUNK_BYTES == ASSISTANTD_SUPERVISO
  *   - Clean startup/shutdown without orphan child processes.
  *   - Deterministic fail-fast behavior when any stage errors.
  * @remaining
- *   - STT/LLM/TTS consumption of queued artifacts remains TODO.
+ *   - LLM/TTS consumption of STT outputs remains TODO.
  */
 
 /** @brief Reset the active utterance length while keeping allocated memory. */
@@ -281,6 +281,46 @@ static assistantd_status_t assistantd_supervisor_drain_capture_ring_into_vad(
   return ASSISTANTD_OK;
 }
 
+/** @brief Run STT for one queued artifact and return at the LLM pipeline boundary (for now). */
+static assistantd_status_t assistantd_supervisor_process_stt_queue(
+    assistantd_supervisor_t *supervisor) {
+  if (supervisor == NULL) {
+    return ASSISTANTD_ERR_INVALID_ARGUMENT;
+  }
+
+  assistantd_supervisor_artifact_t artifact;
+  if (!assistantd_artifact_queue_dequeue(&supervisor->artifact_queue, &artifact)) {
+    return ASSISTANTD_OK;
+  }
+
+  assistantd_stt_request_t request = {
+      .utterance_wav_path = artifact.wav_path,
+  };
+  assistantd_stt_result_t result;
+  assistantd_status_t status = assistantd_stt_transcribe(&supervisor->stt, &request, &result);
+  if (status != ASSISTANTD_OK) {
+    assistantd_log(ASSISTANTD_LOG_ERROR,
+                   "stt failed for sequence_id=%" PRIu64 " path=%s",
+                   artifact.sequence_id,
+                   artifact.wav_path);
+    return status;
+  }
+
+  if (artifact.wav_path[0] != '\0' && unlink(artifact.wav_path) != 0) {
+    assistantd_log(ASSISTANTD_LOG_WARN,
+                   "failed to remove consumed artifact file: %s",
+                   artifact.wav_path);
+  }
+
+  assistantd_log(ASSISTANTD_LOG_INFO,
+                 "stt complete: sequence_id=%" PRIu64 " transcript=%s",
+                 artifact.sequence_id,
+                 result.transcript);
+  assistantd_log(ASSISTANTD_LOG_INFO,
+                 "supervisor pipeline boundary: transcript ready, awaiting LLM integration");
+  return ASSISTANTD_ERR_UNIMPLEMENTED;
+}
+
 static assistantd_status_t assistantd_supervisor_initialize_modules(
     assistantd_supervisor_t *supervisor) {
   assistantd_supervisor_reset_utterance(supervisor);
@@ -409,15 +449,12 @@ assistantd_status_t assistantd_supervisor_run_once(assistantd_supervisor_t *supe
     return vad_status;
   }
 
-  size_t queued_artifacts = assistantd_artifact_queue_size(&supervisor->artifact_queue);
-  if (queued_artifacts > 0) {
-    assistantd_log(
-        ASSISTANTD_LOG_INFO,
-        "supervisor pipeline boundary: %zu queued utterance artifact(s) awaiting STT",
-        queued_artifacts);
-    return ASSISTANTD_ERR_UNIMPLEMENTED;
+  assistantd_status_t stt_status = assistantd_supervisor_process_stt_queue(supervisor);
+  if (stt_status != ASSISTANTD_OK) {
+    return stt_status;
   }
 
+  size_t queued_artifacts = assistantd_artifact_queue_size(&supervisor->artifact_queue);
   assistantd_log(ASSISTANTD_LOG_INFO,
                  "supervisor capture tick: buffered=%zu bytes queued_artifacts=%zu",
                  assistantd_ring_buffer_available(&supervisor->capture_ring),
