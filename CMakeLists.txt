@@ -79,6 +79,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_vad_detector_shape PRIVATE assistantd_core)
   add_test(NAME vad_detector_shape COMMAND test_vad_detector_shape)
 
+  add_executable(test_stt_adapter_shape tests/c/test_stt_adapter_shape.c)
+  target_link_libraries(test_stt_adapter_shape PRIVATE assistantd_core)
+  add_test(NAME stt_adapter_shape COMMAND test_stt_adapter_shape)
+
   add_executable(test_supervisor_shape tests/c/test_supervisor_shape.c)
   target_link_libraries(test_supervisor_shape PRIVATE assistantd_core)
   add_test(NAME supervisor_shape COMMAND test_supervisor_shape)

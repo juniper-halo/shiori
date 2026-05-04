@@ -25,7 +25,7 @@
  *   - Distinguish parse errors, missing required keys, and semantic validation failures.
  *   - Fail fast on invalid mode (must be `local`) and malformed numeric VAD values.
  * @child_process_contracts
- *   - Ensure binary paths and model paths are valid before supervisor starts child processes.
+ *   - Ensure local service URLs and binary paths are valid before supervisor starts modules.
  * @acceptance
  *   - Startup fails with actionable message for any invalid key.
  *   - Defaults + file overrides are deterministic and tested.
@@ -66,10 +66,7 @@ assistantd_status_t assistantd_config_init_defaults(assistantd_config_t *config)
   copy_config_value(config->runtime_dir, sizeof(config->runtime_dir), "/var/lib/local-ai-assistant");
   copy_config_value(config->audio_capture_device, sizeof(config->audio_capture_device), "default");
   copy_config_value(config->audio_playback_device, sizeof(config->audio_playback_device), "default");
-  copy_config_value(config->whisper_bin, sizeof(config->whisper_bin), "/usr/local/bin/whisper-cli");
-  copy_config_value(config->whisper_model_path,
-                    sizeof(config->whisper_model_path),
-                    "/usr/local/share/assistantd/models/ggml-base.en-q5_1.bin");
+  copy_config_value(config->stt_api_base_url, sizeof(config->stt_api_base_url), "http://127.0.0.1:8178");
   copy_config_value(config->llm_api_base_url, sizeof(config->llm_api_base_url), "http://127.0.0.1:8080/v1");
   copy_config_value(config->llm_model, sizeof(config->llm_model), "SmolLM2-1.7B-Instruct-Q4_K_M");
   copy_config_value(config->llm_system_prompt_path, sizeof(config->llm_system_prompt_path), "/etc/local-ai-assistant/system_prompt.txt");
@@ -117,10 +114,8 @@ assistantd_status_t assistantd_config_load_file(assistantd_config_t *config, con
       copy_config_value(config->audio_capture_device, sizeof(config->audio_capture_device), value);
     } else if (strcmp(key, "AUDIO_PLAYBACK_DEVICE") == 0) {
       copy_config_value(config->audio_playback_device, sizeof(config->audio_playback_device), value);
-    } else if (strcmp(key, "WHISPER_BIN") == 0) {
-      copy_config_value(config->whisper_bin, sizeof(config->whisper_bin), value);
-    } else if (strcmp(key, "WHISPER_MODEL_PATH") == 0) {
-      copy_config_value(config->whisper_model_path, sizeof(config->whisper_model_path), value);
+    } else if (strcmp(key, "STT_API_BASE_URL") == 0) {
+      copy_config_value(config->stt_api_base_url, sizeof(config->stt_api_base_url), value);
     } else if (strcmp(key, "LLM_API_BASE_URL") == 0) {
       copy_config_value(config->llm_api_base_url, sizeof(config->llm_api_base_url), value);
     } else if (strcmp(key, "LLM_MODEL") == 0) {
@@ -155,8 +150,8 @@ assistantd_status_t assistantd_config_validate(const assistantd_config_t *config
   }
 
   if (config->runtime_dir[0] == '\0' || config->audio_capture_device[0] == '\0' ||
-      config->audio_playback_device[0] == '\0' || config->whisper_bin[0] == '\0' ||
-      config->whisper_model_path[0] == '\0' || config->llm_api_base_url[0] == '\0' ||
+      config->audio_playback_device[0] == '\0' || config->stt_api_base_url[0] == '\0' ||
+      config->llm_api_base_url[0] == '\0' ||
       config->llm_model[0] == '\0' || config->llm_system_prompt_path[0] == '\0' ||
       config->tts_bin[0] == '\0' || config->tts_voice_path[0] == '\0') {
     return ASSISTANTD_ERR_CONFIG;
@@ -182,8 +177,7 @@ void assistantd_config_dump(const assistantd_config_t *config, FILE *stream) {
   fprintf(stream, "RUNTIME_DIR=%s\n", config->runtime_dir);
   fprintf(stream, "AUDIO_CAPTURE_DEVICE=%s\n", config->audio_capture_device);
   fprintf(stream, "AUDIO_PLAYBACK_DEVICE=%s\n", config->audio_playback_device);
-  fprintf(stream, "WHISPER_BIN=%s\n", config->whisper_bin);
-  fprintf(stream, "WHISPER_MODEL_PATH=%s\n", config->whisper_model_path);
+  fprintf(stream, "STT_API_BASE_URL=%s\n", config->stt_api_base_url);
   fprintf(stream, "LLM_API_BASE_URL=%s\n", config->llm_api_base_url);
   fprintf(stream, "LLM_MODEL=%s\n", config->llm_model);
   fprintf(stream, "LLM_SYSTEM_PROMPT_PATH=%s\n", config->llm_system_prompt_path);

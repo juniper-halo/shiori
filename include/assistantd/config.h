@@ -13,8 +13,7 @@ typedef struct {
   char runtime_dir[ASSISTANTD_CONFIG_VALUE_MAX];
   char audio_capture_device[ASSISTANTD_CONFIG_VALUE_MAX];
   char audio_playback_device[ASSISTANTD_CONFIG_VALUE_MAX];
-  char whisper_bin[ASSISTANTD_CONFIG_VALUE_MAX];
-  char whisper_model_path[ASSISTANTD_CONFIG_VALUE_MAX];
+  char stt_api_base_url[ASSISTANTD_CONFIG_VALUE_MAX];
   char llm_api_base_url[ASSISTANTD_CONFIG_VALUE_MAX];
   char llm_model[ASSISTANTD_CONFIG_VALUE_MAX];
   char llm_system_prompt_path[ASSISTANTD_CONFIG_VALUE_MAX];

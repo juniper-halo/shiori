@@ -1,13 +1,15 @@
 #ifndef ASSISTANTD_STT_ADAPTER_H
 #define ASSISTANTD_STT_ADAPTER_H
 
+#define ASSISTANTD_STT_TIMEOUT_SECONDS 40
+
 #include "assistantd/config.h"
 #include "assistantd/status.h"
 
 typedef struct {
   int initialized;
-  char whisper_bin[ASSISTANTD_CONFIG_VALUE_MAX];
-  char whisper_model_path[ASSISTANTD_CONFIG_VALUE_MAX];
+  char api_base_url[ASSISTANTD_CONFIG_VALUE_MAX];
+  void *curl_handle;
 } assistantd_stt_adapter_t;
 
 typedef struct {

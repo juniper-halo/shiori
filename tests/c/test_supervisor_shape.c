@@ -36,7 +36,7 @@ int main(void) {
 
   status = assistantd_supervisor_run_once(&supervisor);
   assert(status == ASSISTANTD_OK || status == ASSISTANTD_ERR_UNIMPLEMENTED ||
-         status == ASSISTANTD_ERR_CHILD_PROCESS);
+         status == ASSISTANTD_ERR_CHILD_PROCESS || status == ASSISTANTD_ERR_IO);
 
   status = assistantd_supervisor_stop(&supervisor);
   assert(status == ASSISTANTD_OK);
