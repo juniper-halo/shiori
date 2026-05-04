@@ -12,8 +12,6 @@
 
 #include "assistantd/utilities/logger.h"
 
-#define ASSISTANTD_STT_OUTPUT_CAPTURE_MAX 65536
-
 /**
  * @todo Implementation Playbook
  * @brief Implement whisper.cpp adapter with deterministic subprocess contract.
