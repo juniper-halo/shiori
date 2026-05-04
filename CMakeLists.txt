@@ -83,6 +83,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_supervisor_shape PRIVATE assistantd_core)
   add_test(NAME supervisor_shape COMMAND test_supervisor_shape)
 
+  add_executable(test_llm_response_queue_shape tests/c/test_llm_response_queue_shape.c)
+  target_link_libraries(test_llm_response_queue_shape PRIVATE assistantd_core)
+  add_test(NAME llm_response_queue_shape COMMAND test_llm_response_queue_shape)
+
   add_executable(test_llm_adapter_shape tests/c/test_llm_adapter_shape.c)
   target_link_libraries(test_llm_adapter_shape PRIVATE assistantd_core)
   add_test(NAME llm_adapter_shape COMMAND test_llm_adapter_shape)

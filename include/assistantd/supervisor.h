@@ -39,6 +39,7 @@ typedef struct {
   assistantd_tts_adapter_t tts;
   assistantd_utterance_metadata_t utterance_metadata;
   assistantd_artifact_queue_t artifact_queue;
+  assistantd_llm_response_queue_t llm_response_queue;
   uint64_t next_artifact_sequence_id;
 } assistantd_supervisor_t;
 

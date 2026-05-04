@@ -23,9 +23,9 @@
 #define ASSISTANTD_SUPERVISOR_VAD_FRAME_BYTES \
   (ASSISTANTD_SUPERVISOR_VAD_FRAME_SAMPLES * ASSISTANTD_SUPERVISOR_PCM_BYTES_PER_SAMPLE)
 #define ASSISTANTD_SUPERVISOR_INITIAL_UTTERANCE_CAPACITY (ASSISTANTD_SUPERVISOR_VAD_FRAME_BYTES * 16)
+#define ASSISTANTD_SUPERVISOR_LLM_FALLBACK_TEXT "I'm having trouble right now. Please try again in a moment."
 
-_Static_assert(ASSISTANTD_SUPERVISOR_CAPTURE_CHUNK_BYTES == ASSISTANTD_SUPERVISOR_VAD_FRAME_BYTES,
-               "capture chunk bytes must match VAD frame bytes");
+_Static_assert(ASSISTANTD_SUPERVISOR_CAPTURE_CHUNK_BYTES == ASSISTANTD_SUPERVISOR_VAD_FRAME_BYTES, "capture chunk bytes must match VAD frame bytes");
 
 /**
  * @todo Implementation Playbook
@@ -52,7 +52,7 @@ _Static_assert(ASSISTANTD_SUPERVISOR_CAPTURE_CHUNK_BYTES == ASSISTANTD_SUPERVISO
  *   - Clean startup/shutdown without orphan child processes.
  *   - Deterministic fail-fast behavior when any stage errors.
  * @remaining
- *   - LLM/TTS consumption of STT outputs remains TODO.
+ *   - TTS synthesis and playback consumption of queued LLM responses remains TODO.
  */
 
 /** @brief Reset the active utterance length while keeping allocated memory. */
@@ -115,6 +115,51 @@ static void assistantd_supervisor_discard_queued_artifacts(assistantd_supervisor
     }
     memset(&artifact, 0, sizeof(artifact));
   }
+}
+
+/** @brief Remove queued LLM responses that are awaiting future TTS integration. */
+static void assistantd_supervisor_discard_queued_llm_responses(assistantd_supervisor_t *supervisor) {
+  if (supervisor == NULL) {
+    return;
+  }
+
+  assistantd_supervisor_llm_response_t response;
+  while (assistantd_llm_response_queue_dequeue(&supervisor->llm_response_queue, &response)) {
+    memset(&response, 0, sizeof(response));
+  }
+}
+
+/** @brief Enqueue one LLM response job and soft-drop when queue is full. */
+static assistantd_status_t assistantd_supervisor_enqueue_llm_response(
+    assistantd_supervisor_t *supervisor,
+    uint64_t sequence_id,
+    const char *response_text,
+    int used_fallback) {
+  if (supervisor == NULL || response_text == NULL) {
+    return ASSISTANTD_ERR_INVALID_ARGUMENT;
+  }
+
+  assistantd_supervisor_llm_response_t queued = {
+      .sequence_id = sequence_id,
+      .used_fallback = used_fallback,
+      .response_text = {0},
+  };
+  snprintf(queued.response_text, sizeof(queued.response_text), "%s", response_text);
+
+  if (!assistantd_llm_response_queue_enqueue(&supervisor->llm_response_queue, &queued)) {
+    assistantd_log(ASSISTANTD_LOG_WARN,
+                   "llm response queue full: dropped sequence_id=%" PRIu64 " used_fallback=%d",
+                   sequence_id,
+                   used_fallback);
+    return ASSISTANTD_OK;
+  }
+
+  assistantd_log(ASSISTANTD_LOG_INFO,
+                 "queued llm response: sequence_id=%" PRIu64 " used_fallback=%d chars=%zu",
+                 sequence_id,
+                 used_fallback,
+                 strlen(queued.response_text));
+  return ASSISTANTD_OK;
 }
 
 /** @brief Build a deterministic WAV output path for a finalized utterance sequence. */
@@ -281,7 +326,7 @@ static assistantd_status_t assistantd_supervisor_drain_capture_ring_into_vad(
   return ASSISTANTD_OK;
 }
 
-/** @brief Run STT for one queued artifact and return at the LLM pipeline boundary (for now). */
+/** @brief Run STT then LLM for one artifact, then enqueue pending TTS response work. */
 static assistantd_status_t assistantd_supervisor_process_stt_queue(
     assistantd_supervisor_t *supervisor) {
   if (supervisor == NULL) {
@@ -316,15 +361,59 @@ static assistantd_status_t assistantd_supervisor_process_stt_queue(
                  "stt complete: sequence_id=%" PRIu64 " transcript=%s",
                  artifact.sequence_id,
                  result.transcript);
+
+  assistantd_llm_request_t llm_request = {
+      .prompt = result.transcript,
+  };
+  assistantd_llm_result_t llm_result;
+  assistantd_status_t llm_status =
+      assistantd_llm_generate(&supervisor->llm, &llm_request, &llm_result);
+  if (llm_status != ASSISTANTD_OK) {
+    assistantd_log(ASSISTANTD_LOG_ERROR,
+                   "llm failed for sequence_id=%" PRIu64 " status=%d; using fallback response",
+                   artifact.sequence_id,
+                   llm_status);
+    return assistantd_supervisor_enqueue_llm_response(supervisor,
+                                                      artifact.sequence_id,
+                                                      ASSISTANTD_SUPERVISOR_LLM_FALLBACK_TEXT,
+                                                      1);
+  }
+
   assistantd_log(ASSISTANTD_LOG_INFO,
-                 "supervisor pipeline boundary: transcript ready, awaiting LLM integration");
-  return ASSISTANTD_ERR_UNIMPLEMENTED;
+                 "llm complete: sequence_id=%" PRIu64 " chars=%zu",
+                 artifact.sequence_id,
+                 strlen(llm_result.response));
+  return assistantd_supervisor_enqueue_llm_response(supervisor,
+                                                    artifact.sequence_id,
+                                                    llm_result.response,
+                                                    0);
+}
+
+/** @brief Drain one queued LLM response and discard it as a placeholder for future TTS. */
+static assistantd_status_t assistantd_supervisor_drain_llm_response_queue(
+    assistantd_supervisor_t *supervisor) {
+  if (supervisor == NULL) {
+    return ASSISTANTD_ERR_INVALID_ARGUMENT;
+  }
+
+  assistantd_supervisor_llm_response_t response;
+  if (!assistantd_llm_response_queue_dequeue(&supervisor->llm_response_queue, &response)) {
+    return ASSISTANTD_OK;
+  }
+
+  assistantd_log(ASSISTANTD_LOG_INFO,
+                 "tts placeholder drain: sequence_id=%" PRIu64 " used_fallback=%d text=%s",
+                 response.sequence_id,
+                 response.used_fallback,
+                 response.response_text);
+  return ASSISTANTD_OK;
 }
 
 static assistantd_status_t assistantd_supervisor_initialize_modules(
     assistantd_supervisor_t *supervisor) {
   assistantd_supervisor_reset_utterance(supervisor);
   assistantd_artifact_queue_init(&supervisor->artifact_queue);
+  assistantd_llm_response_queue_init(&supervisor->llm_response_queue);
 
   assistantd_status_t status = assistantd_vad_init(&supervisor->vad, supervisor->config);
   if (status != ASSISTANTD_OK) {
@@ -363,6 +452,7 @@ static void assistantd_supervisor_shutdown_modules(assistantd_supervisor_t *supe
   (void)assistantd_audio_capture_stop(&supervisor->capture);
   assistantd_ring_buffer_free(&supervisor->capture_ring);
   assistantd_supervisor_discard_queued_artifacts(supervisor);
+  assistantd_supervisor_discard_queued_llm_responses(supervisor);
   free(supervisor->utterance_metadata.pcm);
   supervisor->utterance_metadata.pcm = NULL;
   supervisor->utterance_metadata.size = 0;
@@ -454,11 +544,18 @@ assistantd_status_t assistantd_supervisor_run_once(assistantd_supervisor_t *supe
     return stt_status;
   }
 
+  assistantd_status_t llm_queue_status = assistantd_supervisor_drain_llm_response_queue(supervisor);
+  if (llm_queue_status != ASSISTANTD_OK) {
+    return llm_queue_status;
+  }
+
   size_t queued_artifacts = assistantd_artifact_queue_size(&supervisor->artifact_queue);
+  size_t queued_llm_responses = assistantd_llm_response_queue_size(&supervisor->llm_response_queue);
   assistantd_log(ASSISTANTD_LOG_INFO,
-                 "supervisor capture tick: buffered=%zu bytes queued_artifacts=%zu",
+                 "supervisor capture tick: buffered=%zu bytes queued_artifacts=%zu queued_llm_responses=%zu",
                  assistantd_ring_buffer_available(&supervisor->capture_ring),
-                 queued_artifacts);
+                 queued_artifacts,
+                 queued_llm_responses);
   return ASSISTANTD_OK;
 }
 
